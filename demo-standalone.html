@@ -1,0 +1,99 @@
+<!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoDama · Test financování</title><style>:root{font:15px system-ui,Arial;color:#173b36;background:#f3f6f5}*{box-sizing:border-box}body{margin:0 auto;max-width:1060px;padding:30px 20px}h1{margin-bottom:4px}.muted{color:#64766f}.notice{background:#e4f4ef;border:1px solid #b5d7cb;border-radius:12px;padding:14px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.card{background:white;border-radius:16px;padding:20px;box-shadow:0 4px 16px #0b39200d;margin:12px 0}label{display:block;margin:14px 0;font-weight:600}input{display:block;width:100%;padding:11px;margin-top:6px;border:1px solid #bacbc4;border-radius:8px;font:inherit}button{background:#087e67;border:0;color:white;border-radius:9px;padding:12px 18px;cursor:pointer}button.secondary{background:#e6eeeb;color:#174438}.value{font-size:26px;font-weight:800}small{color:#64766f}.error{color:#a22;font-weight:bold}table{width:100%;border-collapse:collapse}td{padding:10px;border-bottom:1px solid #e6eae8}td:last-child{text-align:right;font-weight:bold}@media(max-width:500px){body{padding:15px}}</style></head><body><h1>AutoDama <span style="color:#087e67">· Testovací verze</span></h1><p class="muted">Vyzkoušej rozdělení financování a zisku z jednoho auta.</p><div class="notice"><strong>Bezpečné demo:</strong> Nepřihlašuje se k Supabase, nepřistupuje k tvým autům a nic nikam neukládá. Po obnovení stránky se hodnoty vrátí na začátek.</div><div class="grid"><section class="card"><h2>1. Nákup auta</h2><label>Nákupní cena (Kč)<input id="purchase" type="number" min="0" value="400000"></label><label>Moje dostupné peníze (Kč)<input id="ownerFree" type="number" min="0" value="1500000"></label><label>Investorovy dostupné peníze (Kč)<input id="investorFree" type="number" min="0" value="2300000"></label><button id="auto">Rozdělit automaticky</button><label>Z mých peněz (Kč)<input id="owner" type="number" min="0" value="157895"></label><label>Z investorových peněz (Kč)<input id="investor" type="number" min="0" value="242105"></label><small>Úpravou jedné částky se druhá automaticky dopočítá.</small></section><section class="card"><h2>2. Výsledek prodeje</h2><label>Zisk nebo ztráta auta (Kč)<input id="profit" type="number" value="50000"></label><label>Investorův podíl na zisku (%)<input id="percent" type="number" min="0" max="100" value="35"></label><label>Odměna pomocníka ze zisku (%)<input id="helper" type="number" min="0" max="100" value="15"></label><button class="secondary" id="loss">Vyzkoušet ztrátu −20 000 Kč</button><p id="error" class="error" role="alert"></p></section></div><section class="card"><h2>3. Rozdělení výsledku</h2><div class="grid"><div><small>Investor</small><div class="value" id="outInvestor">—</div></div><div><small>Pomocník</small><div class="value" id="outHelper">—</div></div><div><small>Ty</small><div class="value" id="outOwner">—</div></div></div><p id="explain" class="muted"></p></section><section class="card"><h2>Rozdělení financování auta</h2><table><tr><td>Tvoje peníze</td><td id="oFund"></td></tr><tr><td>Investorovy peníze</td><td id="iFund"></td></tr><tr><td>Celkem</td><td id="total"></td></tr></table><p class="muted">Jde o ukázkový výpočet. Skutečná aplikace bude navíc pracovat s náklady, DPH, úhradami, stavem účtů a historickými podmínkami.</p></section><script>/* AutoDama financing calculations. Pure functions: no storage, no mutations.
+ * Values in CZK; money rounded to halere. These are management calculations,
+ * not VAT returns or a substitute for tax accounting.
+ */
+const roundMoney = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const finite = (n, name) => {
+  if (typeof n !== 'number' || !Number.isFinite(n)) throw new Error(name + ': neplatná částka');
+  return n;
+};
+const nonnegative = (n, name) => {
+  finite(n, name);
+  if (n < 0) throw new Error(name + ': záporná hodnota');
+  return n;
+};
+const DEFAULT_FINANCE_SETTINGS = Object.freeze({
+  investorProfitPercent: 35,
+  helperProfitPercent: 15,
+  plannedOwnerDrawMonthly: 60000,
+  helperMode: 'percentage',
+  helperMonthlyFixed: 0,
+  helperVariablePercent: 0
+});
+function validateFinanceSettings(s) {
+  for (const k of ['investorProfitPercent', 'helperProfitPercent', 'helperVariablePercent']) {
+    nonnegative(s[k], k);
+    if (s[k] > 100) throw new Error(k + ': maximálně 100 %');
+  }
+  for (const k of ['plannedOwnerDrawMonthly', 'helperMonthlyFixed']) nonnegative(s[k], k);
+  if (!['percentage', 'fixed-plus-variable'].includes(s.helperMode)) throw new Error('Neplatný způsob odměny pomocníka');
+  return { ...s };
+}
+function allocatePurchase({ purchaseCash, ownerAvailable, investorAvailable, ownerAmount }) {
+  nonnegative(purchaseCash, 'Cena nákupu');
+  nonnegative(ownerAvailable, 'Volné vlastní peníze');
+  nonnegative(investorAvailable, 'Volné investorovy peníze');
+  if (roundMoney(ownerAvailable + investorAvailable) < roundMoney(purchaseCash)) throw new Error('Nedostatek volných prostředků');
+  let owner = ownerAmount === undefined
+    ? roundMoney(purchaseCash * ownerAvailable / (ownerAvailable + investorAvailable || 1))
+    : roundMoney(nonnegative(ownerAmount, 'Vlastní vklad'));
+  let investor = roundMoney(purchaseCash - owner);
+  if (owner > ownerAvailable + 0.001 || investor > investorAvailable + 0.001 || investor < 0)
+    throw new Error('Rozdělení přesahuje dostupný kapitál');
+  return { ownerAmount: owner, investorAmount: investor, investorFraction: purchaseCash ? investor / purchaseCash : 0 };
+}
+function snapshotFunding({ purchaseCash, ownerAmount, investorAmount, investorProfitPercent = 35, helperProfitPercent = 15, effectiveDate }) {
+  for (const [k,v] of Object.entries({purchaseCash,ownerAmount,investorAmount})) nonnegative(v,k);
+  if (Math.abs(roundMoney(ownerAmount + investorAmount - purchaseCash)) > 0.001) throw new Error('Vklady musí odpovídat ceně nákupu');
+  for (const [k,v] of Object.entries({investorProfitPercent,helperProfitPercent})) {
+    nonnegative(v,k); if (v > 100) throw new Error(k + ': maximálně 100 %');
+  }
+  return Object.freeze({
+    purchaseCash: roundMoney(purchaseCash),
+    ownerAmount: roundMoney(ownerAmount),
+    investorAmount: roundMoney(investorAmount),
+    investorFraction: purchaseCash ? investorAmount / purchaseCash : 0,
+    investorProfitPercent, helperProfitPercent,
+    effectiveDate: effectiveDate || null
+  });
+}
+function allocateResult({ profit, funding }) {
+  finite(profit, 'Výsledek obchodu');
+  if (!funding || !Number.isFinite(funding.investorFraction)) throw new Error('Chybí potvrzené financování vozidla');
+  const investorFraction = funding.investorFraction;
+  if (investorFraction < 0 || investorFraction > 1) throw new Error('Neplatný podíl financování');
+  if (profit < 0) {
+    const investor = roundMoney(profit * investorFraction);
+    return { investor, helper: 0, owner: roundMoney(profit - investor), total: roundMoney(profit) };
+  }
+  const investor = roundMoney(profit * investorFraction * funding.investorProfitPercent / 100);
+  const helper = roundMoney(profit * funding.helperProfitPercent / 100);
+  return { investor, helper, owner: roundMoney(profit - investor - helper), total: roundMoney(profit) };
+}
+/* Ledger movements are explicit, never inferred from VAT refunds or bank balances.
+ * Investor profit credits increase investor claim, NOT physical bank cash.
+ */
+function capitalLedger({ openingOwner = 0, openingInvestor = 0, events = [] }) {
+  let owner = finite(openingOwner,'Počáteční vlastní kapitál');
+  let investor = finite(openingInvestor,'Počáteční investorův kapitál');
+  for (const e of events) {
+    if (!['contribution','profit-credit','loss-debit','withdrawal'].includes(e.type)) throw new Error('Neznámý typ kapitálové události');
+    nonnegative(e.amount, 'Částka události');
+    if (!['owner','investor'].includes(e.party)) throw new Error('Neznámý vlastník kapitálu');
+    const sign = ['contribution','profit-credit'].includes(e.type) ? 1 : -1;
+    if (e.party === 'owner') owner = roundMoney(owner + sign * e.amount);
+    else investor = roundMoney(investor + sign * e.amount);
+  }
+  return { owner, investor, total: roundMoney(owner + investor) };
+}
+function vatMonth({ purchases = [], sales = [], costs = [], settlements = [] }) {
+  // Inputs must be validated *eligible VAT amounts*, not invoice gross amounts.
+  const add = (items,label) => items.reduce((sum,n) => roundMoney(sum + nonnegative(n,label)),0);
+  const input = roundMoney(add(purchases,'DPH z nákupů') + add(costs,'DPH z nákladů'));
+  const output = add(sales,'DPH z prodejů');
+  const netDue = roundMoney(output - input);
+  const settled = settlements.reduce((sum,n)=>roundMoney(sum + finite(n,'Úhrada DPH')),0);
+  return { input, output, netDue, settled, outstanding: roundMoney(netDue - settled) };
+}
+
+const $=id=>document.getElementById(id);const n=id=>Number($(id).value);const fmt=x=>new Intl.NumberFormat('cs-CZ',{style:'currency',currency:'CZK',maximumFractionDigits:2}).format(x);function render(){try{const purchase=n('purchase'),owner=n('owner'),investor=n('investor');if(!Number.isFinite(purchase)||purchase<0||owner<0||investor<0||owner>n('ownerFree')||investor>n('investorFree'))throw Error('Zkontroluj dostupné peníze a financování.');const funding=snapshotFunding({purchaseCash:purchase,ownerAmount:owner,investorAmount:investor,investorProfitPercent:n('percent'),helperProfitPercent:n('helper')});const result=allocateResult({profit:n('profit'),funding});$('error').textContent='';$('outInvestor').textContent=fmt(result.investor);$('outHelper').textContent=fmt(result.helper);$('outOwner').textContent=fmt(result.owner);$('oFund').textContent=fmt(owner);$('iFund').textContent=fmt(investor);$('total').textContent=fmt(purchase);$('explain').textContent='Investor financuje '+(funding.investorFraction*100).toFixed(1)+' % auta. '+(n('profit')<0?'Ztrátu nesete podle podílu financování.':'Investor má '+n('percent')+' % ze zisku připadajícího na jeho podíl financování.');}catch(e){$('error').textContent=e.message;for(const id of ['outInvestor','outHelper','outOwner'])$(id).textContent='—';}}function auto(){try{const x=allocatePurchase({purchaseCash:n('purchase'),ownerAvailable:n('ownerFree'),investorAvailable:n('investorFree')});$('owner').value=x.ownerAmount;$('investor').value=x.investorAmount;render()}catch(e){$('error').textContent=e.message}}for(const id of ['purchase','ownerFree','investorFree','profit','percent','helper'])$(id).addEventListener('input',render);$('owner').addEventListener('input',()=>{$('investor').value=Math.round((n('purchase')-n('owner'))*100)/100;render()});$('investor').addEventListener('input',()=>{$('owner').value=Math.round((n('purchase')-n('investor'))*100)/100;render()});$('auto').onclick=auto;$('loss').onclick=()=>{$('profit').value=-20000;render()};auto();</script></body></html>
