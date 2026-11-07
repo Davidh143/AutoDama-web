@@ -1131,22 +1131,32 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
   const docId=uid();
   s.documents.push({id:docId,...macadamDraft.attachment,name:macadamDraft.fileName,category:'Inspekční report Macadam',
    targetType:'vehicle',targetId:next.id,vehicleId:next.id,inspectionDate:macadamDraft.report.inspectionDate});
-  if(checked('macadamWheelCreate')){
-   if(!checked('macadamWheelReceived'))throw Error('Pro založení sady musíš potvrdit, že jsi ji skutečně převzal.');
-   const extra=macadamDraft.report.tires?.extra;
-   if(!macadamDraft.report.secondSetReported||!extra?.qty)throw Error('V reportu není potvrzená druhá sada pneumatik.');
+  const extra=macadamDraft.report.tires?.extra;
+  if(macadamDraft.report.secondSetReported&&extra?.qty){
    s.wheelSets=s.wheelSets||[];
-   if(s.wheelSets.some(w=>w.sourceVehicleId===next.id&&w.origin==='macadam'))
-    throw Error('Druhá sada z Macadamu už byla pro toto vozidlo zaevidována. Zkontroluj sklad kol.');
-   const kind=value('macadamWheelKind'),season=/letn/i.test(extra.season)?'summer':/zimn/i.test(extra.season)?'winter':'unknown';
-   const baseCode='MAC-'+next.id.slice(0,8).toUpperCase();
-   const code=s.wheelSets.some(w=>w.code.toUpperCase()===baseCode)?'MAC-'+uid().slice(0,8).toUpperCase():baseCode;
-   s.wheelSets.push({id:uid(),code,kind,season,rim:kind==='tires'?'none':'unknown',
-    brand:extra.brand||'',size:extra.size||'',qty:Math.min(4,extra.qty),tread:extra.treadMin,
-    estimatedValue:null,location:'U vozidla',received:true,sourceVehicleId:next.id,assignedVehicleId:next.id,
-    status:'assigned',note:'Převzetí potvrzené, podklady Macadam z '+(macadamDraft.report.inspectionDate||'neznámého data')+
-      '. Prodejci zůstává právo rozhodnout, zda bude sada předána kupujícímu.',
-    movements:[],createdAt:new Date().toISOString(),origin:'macadam',originDocumentId:docId});
+   const existing=s.wheelSets.find(w=>w.sourceVehicleId===next.id&&w.origin==='macadam');
+   const confirmed=checked('macadamWheelReceived');
+   if(confirmed&&isSold(next))throw Error('Při zakládání již prodaného auta nejprve ulož Macadam bez převzetí kol, potom potvrď předání ve skladu kol.');
+   if(existing){
+    if(confirmed&&!existing.received){
+     existing.received=true;existing.kind=value('macadamWheelKind');
+     existing.rim=existing.kind==='tires'?'none':'unknown';
+     existing.movements=[...(existing.movements||[]),{from:'nepotvrzeno',to:'převzato',
+      date:new Date().toISOString(),vehicleId:next.id}];
+    }
+   }else{
+    const kind=confirmed?value('macadamWheelKind'):'tires';
+    const season=/letn/i.test(extra.season)?'summer':/zimn/i.test(extra.season)?'winter':/celor/i.test(extra.season)?'allseason':'unknown';
+    const baseCode='MAC-'+next.id.slice(0,8).toUpperCase();
+    const code=s.wheelSets.some(w=>w.code.toUpperCase()===baseCode)?'MAC-'+uid().slice(0,8).toUpperCase():baseCode;
+    s.wheelSets.push({id:uid(),code,kind,season,rim:kind==='tires'?'none':'unknown',
+     brand:extra.brand||'',size:extra.size||'',qty:Math.min(4,extra.qty),tread:extra.treadMin,
+     estimatedValue:null,location:confirmed?'U vozidla':'Nepotvrzeno – podle Macadamu',
+     received:confirmed,sourceVehicleId:next.id,assignedVehicleId:next.id,
+     status:'assigned',note:'Druhá sada uvedená v Macadamu k '+(macadamDraft.report.inspectionDate||'nezjištěnému datu')+
+       '. '+(confirmed?'Převzetí bylo potvrzeno.':'ČEKÁ NA OVĚŘENÍ FYZICKÉHO PŘEVZETÍ.'),
+     movements:[],createdAt:new Date().toISOString(),origin:'macadam',originDocumentId:docId});
+   }
   }
  }if(!old)for(const [key,category]of [['preparation','Servis'],['transport','Doprava'],['insurance','Povinné ručení']])if(number(key)>0)s.costs.push({id:uid(),vehicleId:next.id,name:category,category,date:next.bought,period:next.purchasePeriod,amount:number(key),currency:'CZK',rate:1,vatRate:0,deduction:0,vatExact:null,taxDeductible:true,openingPaid:false,due:next.bought,number:'',test:next.test});});},{onDelete:old?()=>removeRecord('vehicles',id):null,deleteLabel:'Smazat vozidlo',saveLabel:'Uložit vozidlo',preview:()=>{const next=readVehicle(),sold=isSold(next);$$('#dialog-content input').forEach(i=>{if(!i.dataset.baseRequired)i.dataset.baseRequired=i.required?'yes':'no';if(i.name!=='name')i.required=!next.review&&i.dataset.baseRequired==='yes';});$('.sale-fields').hidden=!sold;$$('.sale-fields input').forEach(i=>{if(i.type!=='checkbox')i.disabled=!sold;});$('.eu-fields').hidden=next.vat!=='eu';const draft=structuredClone(state);if(!old){draft.vehicles.push(next);for(const k of ['preparation','transport','insurance'])draft.costs.push({id:k,vehicleId:next.id,amount:number(k),currency:'CZK',rate:1,vatRate:0,deduction:0});}const c=vehicleFinancial(draft,next);$('#calculation').innerHTML=`<span>Nákup bez odpočitatelné DPH <b>${money(c.purchaseNet)}</b></span><span>Nákupní odpočet <b>${money(c.purchaseVat)}</b></span>${sold?`<span>Prodejní DPH <b>${money(c.saleVat)}</b></span><span>Zisk před odměnou <b>${money(c.preProfit)}</b></span><span>${c.profitSource==='recorded'?'Evidovaný čistý zisk (VÝNOS)':'Zisk po odměně'} <b>${money(c.profit)}</b></span>`:''}`;}});
 
@@ -1179,7 +1189,7 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
 
  field('macadamFile').addEventListener('change',()=>{
   macadamDraft.report=null;macadamDraft.attachment=null;macadamDraft.fileName='';
-  field('macadamWheelCreate').checked=false;field('macadamWheelReceived').checked=false;field('macadamWheelKind').value='tires';
+  field('macadamWheelReceived').checked=false;field('macadamWheelKind').value='tires';
   $('#macadamWheelOptions').hidden=true;
   $('#macadamPreview').textContent='Vybraný report načti tlačítkem. Dříve předvyplněné hodnoty ve formuláři zůstávají, dokud je nezměníš.';
  });
@@ -1225,7 +1235,7 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
      '<br>Druhá sada podle reportu: '+(report.secondSetReported?'ANO':'NE / neuvedeno')+' · '+macadamTireLabel(extra)+
      '<br>Rozpoznaná výbava: '+report.equipment.length+' položek</p>'+
      (warnings.length?note(warnings.map(esc).join('<br>'),true):'')+
-     '<p>Poškození z inspekce se NEPŘEVÁDĚJÍ na aktuální závady ani náklady. PDF se uloží s vozidlem.</p>';
+     '<p>Pokud Macadam uvádí druhou sadu pneumatik, po uložení se objeví oranžově ve skladu kol jako nepotvrzená. Poškození se NEPŘEVÁDĚJÍ na dnešní závady ani náklady.</p>';
    dialogPreview?.();
   }catch(err){
    macadamDraft.report=null;macadamDraft.attachment=null;
@@ -1779,9 +1789,9 @@ function macadamFormFields(){
  input('macadamOverwriteKm','Nahradit již zadaný nájezd stavem při inspekci (jinak jej ponechat)',false,'checkbox',{full:true})+
  '<div id="macadamWheelOptions" hidden style="margin-top:12px;padding:12px;border:1px solid #dee5e3;border-radius:8px">'+
  '<b>Druhá sada podle Macadamu – ověř převzetí</b>'+
- '<p>Protokol nepotvrzuje, jestli jsou druhé pneumatiky na discích. Samotná zmínka v PDF sklad nezvyšuje.</p>'+
- input('macadamWheelCreate','Založit druhou sadu do skladu kol',false,'checkbox',{full:true})+
- input('macadamWheelReceived','Potvrzuji, že jsem tuto sadu fyzicky převzal',false,'checkbox',{full:true})+
+ '<p>Pokud druhou sadu ještě nemáš u sebe, nemusíš nic potvrzovat. Typ disků se určuje až při fyzické kontrole.</p>'+
+ '<p><b>Druhá sada se automaticky zaeviduje oranžově jako „Čeká na převzetí“.</b> Bez potvrzení se nezapočítává mezi tvoje skutečné zásoby.</p>'+
+ input('macadamWheelReceived','Tuto druhou sadu jsem opravdu fyzicky převzal (volitelné)',false,'checkbox',{full:true})+
  selectPairs('macadamWheelKind','Co jsi opravdu převzal','tires',
   [['tires','Samotné pneumatiky'],['complete','Kompletní kola s disky']])+
  '</div></div>';
