@@ -1,0 +1,58 @@
+name: AutoDama – publish approved version
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - index.html
+      - .github/workflows/autodama-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: autodama-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout approved source
+        uses: actions/checkout@v4
+      - name: Verify HTML, script integrity and publishable-only configuration
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import base64
+          import re
+          html = Path('index.html').read_text(encoding='utf-8')
+          script = re.search(r'<script type="module">(.*?)</script>', html, flags=re.S)
+          csp = re.search(r"script-src 'sha256-([^']+)'", html)
+          assert script and csp, 'CSP or module script missing'
+          digest = base64.b64encode(hashlib.sha256(script.group(1).encode()).digest()).decode()
+          assert digest == csp.group(1), 'Content Security Policy hash mismatch'
+          assert "sb_secret_" not in html, 'Secret key must not be present in public HTML'
+          assert 'SUPABASE_SERVICE_ROLE_KEY' not in html, 'Service role key must not be present in HTML'
+          print('Static source integrity verified')
+          PY
+          mkdir -p public-site
+          cp index.html public-site/index.html
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload only the user-facing HTML (never SQL or docs)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public-site
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
