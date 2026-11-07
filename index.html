@@ -1133,6 +1133,11 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
  if(isSold(next)&&(!old||!isSold(old))){const terms=helperPlan(state,next.sold);if(terms.mode==='fixed-variable'){next.helperPercent=terms.percent;next.helperScheme={mode:terms.mode,percent:terms.percent,from:terms.from,at:new Date().toISOString()};}else next.helperScheme={mode:'percent',percent:next.helperPercent,at:new Date().toISOString()};}if(old&&isSold(old)&&next.helperPercent!==old.helperPercent)throw Error('Odměny u historicky prodaných aut se nemění.');if(next.funding){if(!(state.capital?.owner+state.capital?.investor))throw Error('Nejprve nastav kapitál investora i vlastní kapitál ve Financích.');const cap=capitalView(state,old?.id||'');if(next.funding.ownerAmount>cap.freeOwn+.01||next.funding.investorAmount>cap.freeInv+.01)throw Error('Nedostatek volného kapitálu jedné strany.');if(!old&&!next.purchaseOpening){const dashboard=financeDashboard(state);if(dashboard.cashKnown&&next.funding.purchaseCash>dashboard.free+.01)throw Error('Chybí skutečná bankovní hotovost po závazcích a rezervách.');}}if(old?.funding&&(JSON.stringify(old.funding)!==JSON.stringify(next.funding)||old.helperPercent!==next.helperPercent)){if(isSold(old))throw Error('Podíly již prodaného auta jsou uzamčené.');if(!confirm('Měníš potvrzené financování; původní podíl zůstane v historii. Pokračovat?'))return;next.fundingHistory=[...(old.fundingHistory||[]),{...old.funding,changedAt:new Date().toISOString()}];}if(old&&!old.funding&&next.funding&&isSold(old))throw Error('Historický prodej nelze zpětně rozdělit bez ověřených podkladů.');if(isSold(next)&&next.vat==='eu'&&euWarnings(state,next).length&&!confirm('U dodání do EU chybí podmínky nebo doklady. Uložit s upozorněním pro účetní?'))return;await saved(s=>{if(old&&old.test!==next.test){const ids=new Set(invoiceList(s,true).filter(i=>i.vehicleId===id).map(i=>i.id));s.costs.filter(c=>c.vehicleId===id).forEach(c=>c.test=next.test);s.policies.filter(p=>p.vehicleId===id).forEach(p=>p.test=next.test);for(const t of s.transactions){const related=t.vehicleId===id||t.allocations.some(a=>ids.has(a.invoiceId));if(related){if(t.allocations.some(a=>!ids.has(a.invoiceId)))throw Error('Platba je spárovaná i s jiným vozidlem. Nejprve ji rozdělte, aby se nemísila testovací a skutečná data.');t.test=next.test;}}}if(isSold(next)){
  const wheelHistory=applyWheelSaleDecisions(s,next,wheelDecisions);
  if(wheelHistory.length)next.wheelSaleHistory=[...(old?.wheelSaleHistory||[]),...wheelHistory];
+ if(!old||!isSold(old)||wheelHistory.length){
+  const delivered=wheelHistory.some(e=>e.result==='deliver'),retained=wheelHistory.some(e=>e.result==='retain');
+  const hasPending=(s.wheelSets||[]).some(w=>w.assignedVehicleId===next.id&&w.status==='assigned'&&!w.received);
+  next.wheelSaleResult=delivered&&retained?'mixed':delivered?'with':retained?'without':hasPending?'unverified':'without';
+ }
  }
  s.vehicles=old?s.vehicles.map(x=>x.id===id?next:x):[...s.vehicles,next];if(invoiceDraft.attachment){const kind=value('invoiceKind');if(invoiceDraft.number&&s.documents.some(d=>d.vehicleId===next.id&&d.invoiceKind===kind&&d.documentNumber===invoiceDraft.number))throw Error('Tato faktura už je u vozidla uložená.');s.documents.push({id:uid(),...invoiceDraft.attachment,name:invoiceDraft.fileName,category:kind==='proforma'?'Zálohová faktura':'Nákupní faktura',targetType:'vehicle',targetId:next.id,vehicleId:next.id,invoiceKind:kind,documentNumber:invoiceDraft.number});}if(macadamDraft.attachment){
   if(s.documents.some(d=>d.vehicleId===next.id&&d.category==='Inspekční report Macadam'&&d.data===macadamDraft.attachment.data))
@@ -1383,7 +1388,7 @@ async function wheelImportOlderMacadam(){
 function wheelSaleFields(v){
  const sets=wheelItems().filter(w=>w.assignedVehicleId===v.id&&w.status==='assigned');
  if(!sets.length)return '<div class="full" id="wheelSalePanel" hidden>'+
-   '<p class="muted">Není evidovaná žádná samostatná sada přiřazená k tomuto autu.</p></div>';
+   '<p class="muted">Není evidovaná žádná převzatá samostatná sada. Pokud auto prodáš, zaznamená se prodej bez druhé sady kol.</p></div>';
  const choices=[['','Vyber, jak jsi sadu vyřídil'],['deliver','Předat s autem zákazníkovi'],
    ['retain','AutoDama si kola ponechá – vrátit do volného skladu']];
  return '<div class="full" id="wheelSalePanel" hidden style="padding:14px;border:1px solid #bacac8;border-radius:10px">'+
@@ -1901,8 +1906,10 @@ function macadamSummary(v){
 
 function wheelSaleDetail(v){
  const history=v.wheelSaleHistory||[];
- if(!history.length)return '';
- return '<h3>Sady kol při prodeji vozidla</h3>'+
+ const labels={with:'Předáno s druhou sadou',without:'Prodáno bez druhé sady',mixed:'Část sad předána, část ponechána',unverified:'Druhá sada podle reportu nebyla při prodeji potvrzená'};
+ const summary=v.wheelSaleResult?' <p><b>Výsledek prodeje:</b> '+esc(labels[v.wheelSaleResult]||'Neurčeno')+'</p>':'';
+ if(!history.length)return summary?'<h3>Kola při prodeji</h3>'+summary:'';
+ return '<h3>Sady kol při prodeji vozidla</h3>'+summary+
   table(['Sada','Datum prodeje','Výsledek'],history.map(e=>
    '<tr><td>'+esc(e.code)+'</td><td>'+esc(e.date)+'</td><td>'+
      (e.result==='deliver'?'Předáno kupujícímu':'Zůstalo AutoDama – vráceno do skladu')+'</td></tr>'))+
