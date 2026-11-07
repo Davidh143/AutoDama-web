@@ -1192,6 +1192,7 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
   try{
    const report=await readMacadamPdf(chosen);
    const enteredVin=value('vin').replace(/\s+/g,'').toUpperCase();
+   if(old?.vin&&old.vin.replace(/\s+/g,'').toUpperCase()!==report.vin)throw Error('Macadam patří jinému VIN než původně uložené vozidlo.');
    if(enteredVin&&enteredVin!==report.vin)
     throw Error('VIN na Macadamu ('+report.vin+') nesouhlasí s VIN ve formuláři ('+enteredVin+').');
    if(state.vehicles.some(v=>v.id!==old?.id&&String(v.vin||'').toUpperCase()===report.vin))
