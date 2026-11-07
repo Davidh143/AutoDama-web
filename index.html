@@ -1900,7 +1900,7 @@ function macadamTireLabel(t){
 }
 function macadamSummary(v){
  const m=v.macadam;if(!m)return '';
- const sets=wheelItems().filter(w=>w.origin==='macadam'&&w.sourceVehicleId===v.id&&w.received);
+ const sets=wheelItems().filter(w=>wheelMatchesMacadam(w,v)&&w.received);
  return '<h3>Macadam · stav při inspekci</h3>'+
   '<p><b>Datum:</b> '+esc(m.inspectionDate||'neuvedeno')+
   ' · <b>Najeto při inspekci:</b> '+num(m.km)+' km · <b>Klíče:</b> '+esc(m.keys??'neuvedeno')+'</p>'+
