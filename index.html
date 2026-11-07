@@ -1135,7 +1135,8 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
  if(wheelHistory.length)next.wheelSaleHistory=[...(old?.wheelSaleHistory||[]),...wheelHistory];
  if(!old||!isSold(old)||wheelHistory.length){
   const delivered=wheelHistory.some(e=>e.result==='deliver'),retained=wheelHistory.some(e=>e.result==='retain');
-  const hasPending=(s.wheelSets||[]).some(w=>w.assignedVehicleId===next.id&&w.status==='assigned'&&!w.received);
+  const hasPending=(s.wheelSets||[]).some(w=>w.assignedVehicleId===next.id&&w.status==='assigned'&&!w.received)||
+   !!(macadamDraft.report?.secondSetReported&&macadamDraft.report.tires?.extra?.qty&&!checked('macadamWheelReceived'));
   next.wheelSaleResult=delivered&&retained?'mixed':delivered?'with':retained?'without':hasPending?'unverified':'without';
  }
  }
@@ -1148,13 +1149,14 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
   const extra=macadamDraft.report.tires?.extra;
   if(macadamDraft.report.secondSetReported&&extra?.qty){
    s.wheelSets=s.wheelSets||[];
-   const existing=s.wheelSets.find(w=>w.sourceVehicleId===next.id&&w.origin==='macadam');
+   const existing=s.wheelSets.find(w=>wheelMatchesMacadam(w,next));
    const confirmed=checked('macadamWheelReceived');
    if(confirmed&&isSold(next))throw Error('Při zakládání již prodaného auta nejprve ulož Macadam bez převzetí kol, potom potvrď předání ve skladu kol.');
    if(existing){
     if(confirmed&&!existing.received){
      existing.received=true;existing.kind=value('macadamWheelKind');
      existing.rim=existing.kind==='tires'?'none':'unknown';
+     existing.note=String(existing.note||'').replace('ČEKÁ NA OVĚŘENÍ FYZICKÉHO PŘEVZETÍ.','Převzetí bylo potvrzeno.').replace('ČEKÁ NA OVĚŘENÍ PŘEVZETÍ.','Převzetí bylo potvrzeno.');
      existing.movements=[...(existing.movements||[]),{from:'nepotvrzeno',to:'převzato',
       date:new Date().toISOString(),vehicleId:next.id}];
     }
@@ -1355,16 +1357,24 @@ function renderWheelOverview(){
  (m.unverified?note(m.unverified+' sad zatím nemá potvrzené fyzické převzetí. Do skladu je nepočítám.',true):'');
 }
 
+function wheelMatchesMacadam(w,v){
+ const extra=v.macadam?.tires?.extra;
+ if(w.sourceVehicleId!==v.id)return false;
+ if(w.origin==='macadam')return true;
+ if(!extra?.size||!extra?.brand)return false;
+ const normalize=x=>String(x||'').toLocaleLowerCase('cs').replace(/\s+/g,'');
+ return normalize(w.brand)===normalize(extra.brand)&&normalize(w.size)===normalize(extra.size)&&w.qty===Math.min(4,extra.qty);
+}
 function macadamMissingWheelReports(s=state){
  return s.vehicles.filter(v=>v.macadam?.secondSetReported&&v.macadam?.tires?.extra?.qty
-   &&!(s.wheelSets||[]).some(w=>w.origin==='macadam'&&w.sourceVehicleId===v.id));
+   &&!(s.wheelSets||[]).some(w=>wheelMatchesMacadam(w,v)));
 }
 function addMacadamPendingWheels(s,vehicles=macadamMissingWheelReports(s)){
  s.wheelSets=s.wheelSets||[];
  let count=0;
  for(const v of vehicles){
   const extra=v.macadam.tires.extra;
-  if(!extra?.qty||s.wheelSets.some(w=>w.origin==='macadam'&&w.sourceVehicleId===v.id))continue;
+  if(!extra?.qty||s.wheelSets.some(w=>wheelMatchesMacadam(w,v)))continue;
   const season=/letn/i.test(extra.season)?'summer':/zimn/i.test(extra.season)?'winter':/celor/i.test(extra.season)?'allseason':'unknown';
   let code='MAC-'+v.id.slice(0,8).toUpperCase();
   if(s.wheelSets.some(w=>w.code.toUpperCase()===code))code='MAC-'+uid().slice(0,8).toUpperCase();
@@ -1476,6 +1486,7 @@ function wheelForm(id='',vehicleId=''){
    if(!confirm('Potvrzuješ fyzické převzetí této sady? Od této chvíle se započítá do skutečného skladu.'))return;
    data.movements=[...(old.movements||[]),{from:'nepotvrzeno',to:'převzato',vehicleId:data.assignedVehicleId,date:new Date().toISOString()}];
    if(data.location.startsWith('Nepotvrzeno'))data.location='U vozidla';
+   data.note=String(data.note||'').replace('ČEKÁ NA OVĚŘENÍ FYZICKÉHO PŘEVZETÍ.','Převzetí bylo potvrzeno.').replace('ČEKÁ NA OVĚŘENÍ PŘEVZETÍ.','Převzetí bylo potvrzeno.');
   }
   if(old&&(old.status!==data.status||old.assignedVehicleId!==data.assignedVehicleId)){
    if(!confirm('Potvrdit změnu stavu nebo přiřazení sady?'))return;
