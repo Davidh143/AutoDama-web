@@ -91,7 +91,7 @@ BEGIN
   (SELECT revision FROM public.autodama_history WHERE workspace_id=p_workspace ORDER BY revision DESC LIMIT 20);
  RETURN v_revision;
 END;
-$function$
+$function$;
 
 
 -- Only the owner can submit a state containing private withdrawals.
