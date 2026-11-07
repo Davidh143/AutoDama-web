@@ -31,3 +31,11 @@ OCR skenů není zahrnuto. Parser čte jen PDF obsahující text; při selhání
 - Syntax celého `<script type="module">` úspěšná.
 - CSP sha256 skriptu aktualizováno po změnách.
 - Žádná změna tabulek ani živých vozidel neproběhla.
+
+## Oprava čtení PDF podle původní proformy (7. 11. 2026)
+
+Opraven problém u PDF, která vykreslují text po **jednotlivých znacích**. Původní čtečka volala `trim()` na každé položce a při spojování vkládala mezeru mezi každý textový fragment. U dokumentu Drivalia to mohlo vyprodukovat `Z n a č k a…` namísto `Značka…`, takže parser nenašel VIN/model/cenu.
+
+Nová čtečka zachovává i samotné znaky mezer a skládá sousední textové fragmenty podle souřadnic `x`, `y` a udávané šířky znaku. Mezeru doplní jen při skutečné horizontální vzdálenosti. Prohlížeč teď zobrazuje přesnou chybu také vedle tlačítka importu, ne jen v horní části formuláře.
+
+**Regresní test:** Z původní dodané PDF proformy byl lokálně zkonstruován analogický tok 760+ jednotlivých glyphů a rekonstruovány řádky. Správně vzniklo `Značka a model: SKODA Kodiaq…`, `Č. karoserie: TMBLN7NSXM8055029`, `RZ: 8AR9610`, datum 1. registrace a částka. Šest kontrolních výrazů prošlo. Není to zatím plný E2E test v uživatelově Chromu s originální PDF.js.
