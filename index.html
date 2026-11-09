@@ -1163,8 +1163,7 @@ ${fundingFormFields(v)}${!old?section('Rychlé zadání prvních nákladů','Bez
    }else{
     const kind=confirmed?value('macadamWheelKind'):'tires';
     const season=/letn/i.test(extra.season)?'summer':/zimn/i.test(extra.season)?'winter':/celor/i.test(extra.season)?'allseason':'unknown';
-    const baseCode='MAC-'+next.id.slice(0,8).toUpperCase();
-    const code=s.wheelSets.some(w=>w.code.toUpperCase()===baseCode)?'MAC-'+uid().slice(0,8).toUpperCase():baseCode;
+    const code=nextWheelCode(s);
     s.wheelSets.push({id:uid(),code,kind,season,rim:kind==='tires'?'none':'unknown',
      brand:extra.brand||'',size:extra.size||'',qty:Math.min(4,extra.qty),tread:extra.treadMin,
      estimatedValue:null,location:confirmed?'U vozidla':'Nepotvrzeno – podle Macadamu',
@@ -1335,6 +1334,43 @@ const WHEEL_KIND={complete:'Kompletní kola (disky a pneu)',tires:'Samotné pneu
 const WHEEL_SEASON={summer:'Letní',winter:'Zimní',allseason:'Celoroční',unknown:'Nezjištěno'};
 const WHEEL_RIM={alu:'Alu',steel:'Plech',none:'Bez disků',unknown:'Nezjištěno'};
 function wheelItems(s=state){return s.wheelSets||[];}
+
+function nextWheelCode(s){
+ const used=new Set((s.wheelSets||[]).map(w=>String(w.code||'').trim().toUpperCase()));
+ let highest=0;
+ for(const code of used){
+  const match=code.match(/^KOLA-(\d+)$/);
+  if(match){
+   const n=Number(match[1]);
+   if(Number.isSafeInteger(n))highest=Math.max(highest,n);
+  }
+ }
+ let next=highest+1;
+ while(used.has('KOLA-'+String(next).padStart(3,'0')))next++;
+ return 'KOLA-'+String(next).padStart(3,'0');
+}
+function oldMacadamWheelCodes(s=state){
+ return (s.wheelSets||[]).filter(w=>w.origin==='macadam'&&/^MAC-[A-F0-9]{8}$/i.test(String(w.code||'')));
+}
+async function renameOldMacadamWheelCodes(){
+ const pending=oldMacadamWheelCodes();
+ if(!pending.length)return toast('Všechny automatické sady již mají přehledné označení.');
+ if(!confirm('Přejmenovat '+pending.length+' starších sad MAC-… na KOLA-001, KOLA-002 atd.? Vazby na auta i historie zůstanou zachované.'))return;
+ let count=0;
+ await change(s=>{
+  for(const w of oldMacadamWheelCodes(s)){
+   const newCode=nextWheelCode(s);
+   w.code=newCode;count++;
+   for(const v of s.vehicles){
+    for(const event of v.wheelSaleHistory||[]){
+     if(event.wheelId===w.id)event.code=newCode;
+    }
+   }
+  }
+ });
+ toast('Přejmenováno '+count+' sad. Vazby na auta a fyzické zásoby se nezměnily.');
+}
+
 function wheelMetrics(s=state){
  const physical=wheelItems(s).filter(w=>w.received&&(w.status==='available'||w.status==='assigned'));
  const free=physical.filter(w=>w.status==='available'),attached=physical.filter(w=>w.status==='assigned');
@@ -1376,8 +1412,7 @@ function addMacadamPendingWheels(s,vehicles=macadamMissingWheelReports(s)){
   const extra=v.macadam.tires.extra;
   if(!extra?.qty||s.wheelSets.some(w=>wheelMatchesMacadam(w,v)))continue;
   const season=/letn/i.test(extra.season)?'summer':/zimn/i.test(extra.season)?'winter':/celor/i.test(extra.season)?'allseason':'unknown';
-  let code='MAC-'+v.id.slice(0,8).toUpperCase();
-  if(s.wheelSets.some(w=>w.code.toUpperCase()===code))code='MAC-'+uid().slice(0,8).toUpperCase();
+  const code=nextWheelCode(s);
   s.wheelSets.push({id:uid(),code,kind:'tires',season,rim:'none',brand:extra.brand||'',size:extra.size||'',
    qty:Math.min(4,extra.qty),tread:Number.isFinite(extra.treadMin)?extra.treadMin:null,estimatedValue:null,
    location:'Nepotvrzeno – podle Macadamu',received:false,
@@ -1430,6 +1465,7 @@ function applyWheelSaleDecisions(s,v,decisions){
 function renderWheelStock(){
  const m=wheelMetrics(),arr=[...wheelItems()].sort((a,b)=>Number(a.received)-Number(b.received)||String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
  const missing=macadamMissingWheelReports();
+ const legacy=oldMacadamWheelCodes().length;
  const tr=arr.map(w=>{
   const active=w.received&&(w.status==='available'||w.status==='assigned');
   const title='<b>'+esc(w.code)+'</b><small>'+esc(WHEEL_KIND[w.kind])+' · '+esc(WHEEL_SEASON[w.season])+'</small><small>'+esc(w.brand)+' '+esc(w.size)+' · '+esc(WHEEL_RIM[w.rim])+'</small>';
@@ -1444,6 +1480,7 @@ function renderWheelStock(){
  card('Volná kola na discích',m.complete,'Po 4 kusech')+card('Přiřazené sady',m.assigned,'Nejsou k nabídnutí jinému autu')+
  card('Fyzických kusů celkem',m.pieces,'Včetně neúplných sad')+'</div>'+
  panel('Evidence sad',note('Jedna sada má 1–4 kusy. Ověř převzetí, jinak se sada nepočítá do skladu. Při prodeji vozidla sadu označ Předat, nebo ji vrať do volného skladu. Hodnota je orientační, nepočítá se do zisku ani DPH.')+
+ (legacy?note('Starší automatické názvy MAC-… můžeš bezpečně převést na KOLA-001, KOLA-002… Bez změny sad a jejich vazeb. ',true)+action('Přejmenovat '+legacy+' starších sad','wheelRenameLegacy'):'')+
  '<p><b>Volných jednotlivých kusů:</b> '+m.incomplete+' · <b>Nepotvrzených sad:</b> '+m.unverified+'</p>'+ 
  (missing.length?note(missing.length+' starších vozidel má v Macadamu druhou sadu, která ještě nebyla založená v evidenci. Po doplnění se zobrazí oranžově.',true)+action('Zaevidovat starší sady z Macadamu','wheelBackfill'):'')+
  table(['Sada / rozměr','Stav','Původ / přiřazení','Uložení',''],tr)+
@@ -1452,7 +1489,7 @@ function renderWheelStock(){
 }
 function wheelForm(id='',vehicleId=''){
  const old=wheelItems().find(w=>w.id===id);
- const w=old||{id:uid(),code:'KOLA-'+String(wheelItems().length+1).padStart(3,'0'),kind:'complete',season:'unknown',rim:'unknown',
+ const w=old||{id:uid(),code:nextWheelCode(state),kind:'complete',season:'unknown',rim:'unknown',
   brand:'',size:'',qty:4,tread:null,estimatedValue:null,location:'',received:false,
   sourceVehicleId:vehicleId,assignedVehicleId:vehicleId,status:vehicleId?'assigned':'available',note:'',movements:[],createdAt:new Date().toISOString()};
  const cars=[['','Bez vozidla'],...state.vehicles.map(v=>[v.id,v.name+' · '+(v.plate||'bez SPZ')])];
@@ -1542,7 +1579,7 @@ function renderSettings(){if(cloudMode()){renderCloudSettings();return;}const s=
 function settingsForm(){const p=state.settings,owner=!cloudMode()||getCloudStore()?.workspace?.role==='owner';showDialog('Finanční nastavení',`<div class="form-grid">${input('openingDate','Počáteční datum evidence',p.openingDate,'date',{required:true})}${amount('eurRate','Oceňovací kurz CZK/EUR',p.eurRate,{min:.000001,step:.000001})}${amount('reserve','Minimální finanční rezerva (Kč)',p.reserve)}${owner?amount('plannedWithdrawal','Plánovaný měsíční osobní výběr (Kč)',p.plannedWithdrawal||0):''}</div>`,async()=>saved(s=>{for(const k of ['eurRate','reserve',...(owner?['plannedWithdrawal']:[])])s.settings[k]=number(k);s.settings.openingDate=value('openingDate');}));}
 function taxSettings(){const p=state.settings;const labels={credit:'Roční sleva na poplatníka (Kč)',taxThreshold:'Hranice vyšší sazby daně (Kč)',taxLow:'Nižší sazba daně (%)',taxHigh:'Vyšší sazba daně (%)',socialRate:'Sazba sociálního pojištění (%)',socialBase:'Vyměřovací základ sociálního (% zisku)',socialMinimum:'Minimální měsíční záloha sociálního (Kč)',socialMaximum:'Roční maximální sociální vyměřovací základ (Kč)',healthRate:'Sazba zdravotního pojištění (%)',healthBase:'Vyměřovací základ zdravotního (% zisku)',healthMinimum:'Minimální měsíční záloha zdravotního (Kč)',taxMonths:'Počet měsíců hlavní činnosti',otherTaxIncome:'Další základ daně pro progresi (Kč)'};showDialog('Orientační daňové parametry OSVČ',note('Výchozí parametry jsou pro standardní hlavní činnost v roce 2026. Jejich platnost pro vaši situaci zde nebyla ověřena účetní. Nepotvrzujte jiný rok bez aktualizace sazeb, hranic a minim.',true)+`<div class="form-grid">${input('taxYear','Daňový rok',p.taxYear,'number',{required:true,min:2020,max:2100})}${Object.entries(labels).map(([k,l])=>amount(k,l,p[k],k==='taxMonths'?{min:1,max:12,step:1}:{})).join('')}${input('taxConfirmed','Ověřil/a jsem parametry a předpoklady pro vybraný rok',p.taxConfirmed,'checkbox',{full:true})}</div>`,async()=>saved(s=>{for(const k of ['taxYear',...Object.keys(labels)])s.settings[k]=number(k);s.settings.taxConfirmed=checked('taxConfirmed');}));field('taxYear').oninput=()=>{field('taxConfirmed').checked=false;};}
 const handlers={
- wheel:id=>wheelForm(id),wheelFor:id=>wheelForm('',id),wheelBackfill:wheelImportOlderMacadam,wheelRelease:id=>wheelMove(id,'available'),wheelDeliver:id=>wheelMove(id,'delivered'),wheelStockView:()=>{location.hash='#wheels';render();},
+ wheel:id=>wheelForm(id),wheelFor:id=>wheelForm('',id),wheelBackfill:wheelImportOlderMacadam,wheelRenameLegacy:renameOldMacadamWheelCodes,wheelRelease:id=>wheelMove(id,'available'),wheelDeliver:id=>wheelMove(id,'delivered'),wheelStockView:()=>{location.hash='#wheels';render();},
  cloudAudit:cloudAuditHistory,cloudCompanyMfaStatus:cloudCompanyMfaStatus,cloudEnableMfa:cloudEnableMfa,
  goalsSettings:goalsSettingsForm,goalsRetry:()=>{goalsError='';void ensureOwnerGoals();renderGoals();},
  fundSettings:fundSettingsForm,fundEvent:fundEventForm,helperSettings:helperSettingsForm,helperBook,vehicle:id=>vehicleForm(id),vehicleDetail,cost:id=>costForm(id),costFor:id=>costForm('',id),policy:id=>policyForm(id),policyFor:id=>policyForm('',id),document:id=>documentForm(id),documentFor:id=>documentForm('',{targetType:'vehicle',targetId:id,vehicleId:id}),documentTx:id=>documentForm('',{targetType:'transaction',targetId:id}),documentInvoice:id=>documentForm('',{targetType:'invoice',targetId:id}),openDocument:id=>openDocument(id),downloadDocument:id=>openDocument(id,true),account:accountForm,transaction:id=>transactionForm(id),obligation:obligationForm,period:periodForm,vatDetail,csv:csvForm,settingsForm,taxSettings,stockWatchSettings:stockWatchSettingsForm,
