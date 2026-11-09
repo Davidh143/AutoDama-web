@@ -776,9 +776,21 @@ async function helperBook(){
  toast('Fix zaúčtován jednou; nyní lze přiřadit doklad a bankovní úhradu.');
 }
 
+// Tax-inclusive purchase funds stay tied until the VAT period is actually
+// reconciled and settled. A VAT refund is return of capital, never profit.
+function settledPurchaseVAT(s,v){
+ if(v.review&&!v.purchaseVatConfirmed)return 0;
+ const period=v.purchasePeriod||month(v.bought),p=s.vatPeriods.find(x=>x.id===period);
+ if(!p||['Předběžné','Připraveno'].includes(p.status)||p.actual===null||p.actual===undefined)return 0;
+ if(Math.abs(periodSettlement(s,p).outstanding)>.01)return 0;
+ // If the accountant's filed figure differs, do not allocate an unexplained refund.
+ if(Math.abs(vatResult(s,period).result-p.actual)>.01)return 0;
+ return purchaseTax(v).deductible;
+}
 function capitalView(s,exclude=''){
  const p=s.capital||{owner:0,investor:0,asOf:currentDay()};
  let own=p.owner||0,inv=p.investor||0,tiedOwn=0,tiedInv=0;
+ let vatPendingOwn=0,vatPendingInv=0,vatReleasedOwn=0,vatReleasedInv=0;
  const asOf=p.asOf||currentDay();
  for(const t of real(s,s.transactions).filter(t=>t.date>=asOf)){
   if(t.type==='deposit')own=round(own+txCZK(s,t));
@@ -791,14 +803,27 @@ function capitalView(s,exclude=''){
  }
  for(const v of s.vehicles){
   if(v.test||!v.funding||v.id===exclude)continue;
-  if(!isSold(v)){tiedOwn=round(tiedOwn+v.funding.ownerAmount);tiedInv=round(tiedInv+v.funding.investorAmount);}
-  else if(v.sold&&v.sold>=asOf){
+  if(!isSold(v)){
+   const fraction=v.funding.investorFraction;
+   const totalInput=(v.review&&!v.purchaseVatConfirmed)?0:purchaseTax(v).deductible;
+   const released=settledPurchaseVAT(s,v);
+   const releaseOwner=round(released*(1-fraction)),releaseInvestor=round(released-releaseOwner);
+   tiedOwn=round(tiedOwn+v.funding.ownerAmount-releaseOwner);
+   tiedInv=round(tiedInv+v.funding.investorAmount-releaseInvestor);
+   vatPendingOwn=round(vatPendingOwn+(totalInput-released)*(1-fraction));
+   vatPendingInv=round(vatPendingInv+(totalInput-released)*fraction);
+   vatReleasedOwn=round(vatReleasedOwn+releaseOwner);
+   vatReleasedInv=round(vatReleasedInv+releaseInvestor);
+  }else if(v.sold&&v.sold>=asOf){
+   // A sold vehicle already releases all its tied cost; don't release its VAT twice.
    const r=fundingSplit(s,v);
    if(r){own=round(own+r.owner);inv=round(inv+r.investor);}
   }
  }
  const d=financeDashboard(s);
- return {own,inv,tiedOwn,tiedInv,freeOwn:Math.max(0,round(own-tiedOwn)),freeInv:Math.max(0,round(inv-tiedInv)),bankFree:d.cashKnown?Math.max(0,d.free):null};
+ return {own,inv,tiedOwn,tiedInv,vatPendingOwn,vatPendingInv,vatReleasedOwn,vatReleasedInv,
+  freeOwn:Math.max(0,round(own-tiedOwn)),freeInv:Math.max(0,round(inv-tiedInv)),
+  bankFree:d.cashKnown?Math.max(0,d.free):null};
 }
 function fundingSplit(s,v){
  if(!v.funding||!isSold(v))return null;
@@ -833,9 +858,10 @@ function fundingDetail(s,v){
 function fundingPanel(s){
  const c=capitalView(s),items=s.vehicles.filter(v=>!v.test&&v.funding);
  return panel('Kapitál AutoDama · já a investor',
-  note('Virtuální kapitál není druhý bankovní účet. Počáteční stav zahrnuje také peníze již vázané ve skladových autech. Přijatá DPH není zisk.')
-  +'<div class="stats">'+card('Můj kapitál',money(c.own))+card('Kapitál investora',money(c.inv))+card('Moje volné prostředky',money(c.freeOwn))+card('Volné prostředky investora',money(c.freeInv))+'</div>'
+  note('Virtuální kapitál není druhý bankovní účet. Počáteční stav zahrnuje také peníze již vázané ve skladových autech. Přijatá DPH není zisk. Evidenčně volné prostředky nejsou zárukou peněz na účtu.')
+  +'<div class="stats">'+card('Můj kapitál',money(c.own))+card('Kapitál investora',money(c.inv))+card('Můj evidenčně volný kapitál',money(c.freeOwn))+card('Investorův evidenčně volný kapitál',money(c.freeInv))+'</div>'
   +'<p>Vázáno ve skladových autech: já <b>'+money(c.tiedOwn)+'</b>, investor <b>'+money(c.tiedInv)+'</b>.</p>'
+  +'<p>DPH čekající na vypořádání: já <b>'+money(c.vatPendingOwn)+'</b>, investor <b>'+money(c.vatPendingInv)+'</b>. DPH uvolněná po vypořádání: já <b>'+money(c.vatReleasedOwn)+'</b>, investor <b>'+money(c.vatReleasedInv)+'</b>.</p>'
   +'<p>Skutečná hotovost k investování po závazcích a rezervách: <b>'+(c.bankFree===null?'Nejprve doplň bankovní účty':money(c.bankFree))+'</b>.</p>'
   +'<div class="button-row">'+action('Nastavit kapitál a procenta','fundSettings')+action('Vklad / výběr investora','fundEvent')+'</div>'
   +'<h3>Financovaná auta</h3>'
