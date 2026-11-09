@@ -77,7 +77,7 @@ test('Drivalia Crystal Reports final invoice recognizes every required field',()
  assert.equal(r.firstRegistration,'');
  assert.equal(r.due,'');
 });
-const updateInvoice=vm.runInNewContext(grab('function invoiceVehicleUpdate(','function invoiceApprovalPrompt(')+';invoiceVehicleUpdate',{
+const updateInvoice=vm.runInNewContext(grab('function invoiceVehicleUpdate(','function latestStoredPurchaseInvoice(')+';invoiceVehicleUpdate',{
  month:s=>s.slice(0,7),currentDay:()=> '2026-11-09'
 });
 const vehicle=()=>({
@@ -86,7 +86,7 @@ const vehicle=()=>({
  purchaseVatExact:null,review:true,firstRegistration:'2021-10-19'
 });
 test('approved final invoice fills VAT, document number, DUZP and period',()=>{
- const v=updateInvoice(vehicle(),parser(drivaliaLayout),true);
+ const v=updateInvoice(vehicle(),parser(drivaliaLayout),100);
  assert.equal(v.purchaseVatRate,21);
  assert.equal(v.purchaseVatExact,49560);
  assert.equal(v.purchaseDeduction,100);
@@ -97,14 +97,14 @@ test('approved final invoice fills VAT, document number, DUZP and period',()=>{
  assert.equal(v.firstRegistration,'2021-10-19');
 });
 test('no approval: invoice values can be read without claiming an input VAT deduction',()=>{
- const v=updateInvoice(vehicle(),parser(drivaliaLayout),false);
+ const v=updateInvoice(vehicle(),parser(drivaliaLayout));
  assert.equal(v.purchaseVatExact,49560);
  assert.equal(v.purchaseVatConfirmed,false);
  assert.equal(v.purchaseDeduction,0);
 });
 test('VIN or gross-price mismatch blocks automatic update',()=>{
- assert.throws(()=>updateInvoice({...vehicle(),vin:'TMBJG7NX7NY000002'},parser(drivaliaLayout),true));
- assert.throws(()=>updateInvoice({...vehicle(),purchase:350000},parser(drivaliaLayout),true));
+ assert.throws(()=>updateInvoice({...vehicle(),vin:'TMBJG7NX7NY000002'},parser(drivaliaLayout),100));
+ assert.throws(()=>updateInvoice({...vehicle(),purchase:350000},parser(drivaliaLayout),100));
 });
 test('previously uploaded final invoices have a one-click reconciliation path',()=>{
  assert.ok(code.includes("function reconcileStoredPurchaseInvoices(vehicleId='')"));
@@ -112,34 +112,51 @@ test('previously uploaded final invoices have a one-click reconciliation path',(
  assert.ok(code.includes("action('Načíst DPH z uložených faktur','reconcileInvoices')"));
 });
 
-test('stored invoice reconciliation reads the newest pending final PDF and preserves confirmed deductions',async()=>{
+test('stored invoice reconciliation shows the newest pending PDF and requires explicit confirmation',async()=>{
  const confirmed={...vehicle(),id:'confirmed',purchaseVatConfirmed:true,purchaseDeduction:50};
- const pending={...vehicle(),id:'pending',vin:'TMBJG7NX7NY000002'};
+ const pending={...vehicle(),id:'pending',vin:'TMBJG7NX7NY000002',purchaseVatExact:49560,purchaseDeduction:75};
  const finalPdf=(id,v)=>({id,vehicleId:v.id,category:'Nákupní faktura',mime:'application/pdf',name:id+'.pdf'});
  const state={
   vehicles:[confirmed,pending],
   documents:[finalPdf('confirmed',confirmed),finalPdf('old',pending),finalPdf('latest',pending),
    {...finalPdf('proforma',pending),category:'Zálohová faktura'}]
  };
- const reads=[],errors=[];
- const reconcile=vm.runInNewContext(
-  grab('function invoiceVehicleUpdate(','function vehicleForm(')+';reconcileStoredPurchaseInvoices',{
-   state,File,month:s=>s.slice(0,7),currentDay:()=> '2026-11-09',money:String,confirm:()=>true,
+ const reads=[];
+ const elements={'#editor':{open:true},'#invoice-vat-review':{isConnected:true}};
+ const values={vatClaimReceived:'2026-11-09',vatClaimPeriod:'2026-10'};
+ let dialog,writes=0;
+ const {reconcileStoredPurchaseInvoices:reconcile,pendingPurchaseVat,pendingPurchaseVatTable}=vm.runInNewContext(
+  grab('function invoiceVehicleUpdate(','function vehicleForm(')+';({reconcileStoredPurchaseInvoices,pendingPurchaseVat,pendingPurchaseVatTable})',{
+   state,File,month:s=>s.slice(0,7),currentDay:()=> '2026-11-09',money:String,esc:String,date:String,
+   $:key=>elements[key],note:String,table:(_heads,rows)=>rows.join(''),action:String,card:(_label,val)=>val,
+   input:(_name,_label,val)=>String(val),amount:(_name,_label,val)=>String(val),
+   showDialog:(_title,html,submit,{saveLabel})=>{dialog={html,submit,saveLabel};},
+   number:()=>75,value:key=>values[key],round,validDate,validPeriod:s=>/^\d{4}-\d{2}$/.test(s),
+   finiteAmount:(value,min,max)=>Number.isFinite(value)&&value>=min&&value<=max,
    documentBlob:()=>new Blob(),readInvoicePdfLines:async file=>{
     reads.push(file.name);
-    const vin=file.name==='confirmed.pdf'?confirmed.vin:pending.vin;
-    return drivaliaLayout.map(line=>line.replace('TMBJG7NX7NY000001',vin));
+    return drivaliaLayout.map(line=>line.replace('TMBJG7NX7NY000001',pending.vin));
    },
-   parseVehicleInvoice:parser,saved:async update=>update(state),toast:()=>{},alert:msg=>errors.push(msg)
+   parseVehicleInvoice:parser,saved:async update=>{update(state);writes++;},toast:()=>{}
   });
+ assert.match(pendingPurchaseVatTable(pendingPurchaseVat(state)),/49560.*Čeká na potvrzení/);
  await reconcile();
+ assert.equal(writes,0);
+ assert.equal(dialog.saveLabel,'Potvrdit odpočet a uložit');
+ assert.match(dialog.html,/49560/);
+ assert.equal(state.vehicles[1].purchaseVatConfirmed,undefined);
+ await assert.rejects(dialog.submit(),/Zvol období/);
+ assert.equal(writes,0);
+ values.vatClaimPeriod='2026-11';
+ await dialog.submit();
+ assert.equal(writes,1);
  await reconcile(pending.id);
  assert.deepEqual(reads,['latest.pdf']);
- assert.deepEqual(errors,[]);
  assert.equal(state.vehicles[0],confirmed);
  assert.equal(state.vehicles[0].purchaseDeduction,50);
  assert.equal(state.vehicles[1].purchaseVatExact,49560);
  assert.equal(state.vehicles[1].purchaseVatConfirmed,true);
+ assert.equal(state.vehicles[1].purchaseDeduction,75);
 });
 
 const capitalDependencies={
