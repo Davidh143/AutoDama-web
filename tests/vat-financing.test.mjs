@@ -106,6 +106,17 @@ test('VIN or gross-price mismatch blocks automatic update',()=>{
  assert.throws(()=>updateInvoice({...vehicle(),vin:'TMBJG7NX7NY000002'},parser(drivaliaLayout),100));
  assert.throws(()=>updateInvoice({...vehicle(),purchase:350000},parser(drivaliaLayout),100));
 });
+test('a final invoice on a complete vehicle cannot save an unconfirmed positive deduction',()=>{
+ const validate=vm.runInNewContext(grab('function validateVehiclePurchaseVat(','function latestStoredPurchaseInvoice(')+';validateVehiclePurchaseVat',
+  {month:s=>s?.slice(0,7)||''});
+ const v={...vehicle(),review:false,bought:'2026-11-03',purchaseVatExact:49560,purchaseDeduction:100,purchaseVatConfirmed:false};
+ assert.throws(()=>validate(v,true),/potvrď nárok na odpočet/);
+ assert.doesNotThrow(()=>validate(v,false));
+ assert.doesNotThrow(()=>validate({...v,review:true},true));
+ assert.doesNotThrow(()=>validate({...v,purchaseDeduction:0},true));
+ assert.doesNotThrow(()=>validate({...v,purchaseVatConfirmed:true},true));
+ assert.throws(()=>validate({...v,purchaseVatConfirmed:true,purchasePeriod:'2026-10'},true),/nejdříve/);
+});
 test('previously uploaded final invoices have a one-click reconciliation path',()=>{
  assert.ok(code.includes("function reconcileStoredPurchaseInvoices(vehicleId='')"));
  assert.ok(code.includes("reconcileInvoices:()=>reconcileStoredPurchaseInvoices()"));
