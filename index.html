@@ -1227,55 +1227,85 @@ async function readInvoicePdfLines(file){
   }
  }
 }
-// A 21% rate alone cannot prove deductible VAT: only accept a matching
-// tax amount actually printed alongside the invoice tax breakdown.
+// Parse Czech invoice monetary figures without guessing a VAT rate from gross price.
+function invoiceAmounts(text){
+ const normalized=String(text).replace(/[\u00a0\u202f]/g,' ');
+ return [...normalized.matchAll(/-?(?:\d{1,3}(?:[ .]\d{3})+|\d+)(?:[,.]\d{2})?/g)]
+   .map(m=>Number(m[0].replace(/[ ]/g,'').replace(/\.(?=\d{3}(?:\D|$))/g,'').replace(',','.')))
+   .filter(Number.isFinite);
+}
+function invoiceMoney(text){return invoiceAmounts(text)[0]??null;}
 function extractInvoiceVAT(rows,gross){
  if(!Number.isFinite(gross)||gross<=0)return null;
- const expected=vatPart(gross,21);
- const moneyTokens=s=>(String(s).match(/(?:\d{1,3}(?:[ \u00a0.]\d{3})+|\d{4,})(?:[,.]\d{2})?/g)||[])
-  .map(x=>Number(x.replace(/[ \u00a0]/g,'').replace(/\.(?=\d{3}(?:\D|$))/g,'').replace(',','.')))
-  .filter(Number.isFinite);
  for(let i=0;i<rows.length;i++){
-  const nearby=rows.slice(Math.max(0,i-1),Math.min(rows.length,i+2)).join(' ');
-  if(!/(?:\bDPH\b|\bdaň)/i.test(nearby)||!/\b21\s*%/.test(nearby))continue;
-  if(moneyTokens(nearby).some(n=>Math.abs(n-expected)<.02))return {rate:21,vat:expected};
+  // The rate and the two amounts can be split across PDF text rows.
+  const candidate=rows.slice(i,Math.min(i+3,rows.length)).join(' ');
+  if(!/(?:sazba\s*DPH|daňová\s*rekapitulace)/i.test(candidate))continue;
+  const rateMatch=candidate.match(/\b(21|12)\s*%/);
+  if(!rateMatch)continue;
+  const rate=Number(rateMatch[1]);
+  const tail=candidate.slice(candidate.indexOf(rateMatch[0])+rateMatch[0].length);
+  const numbers=invoiceAmounts(tail);
+  if(numbers.length<2)continue;
+  const base=numbers[0],vat=numbers[1];
+  if(base<=0||vat<0)continue;
+  if(Math.abs(round(base+vat)-gross)>.03)continue;
+  if(Math.abs(round(base*rate/100)-vat)>.03)continue;
+  return {rate,base,vat};
  }
  return null;
 }
 function parseVehicleInvoice(lines,forcedKind=null){
- const rows=lines.map(x=>String(x).replace(/\s+/g,' ').trim()).filter(Boolean),whole=rows.join('\n');
- const kind=forcedKind||(/PROFORMA|ZÁLOHOVÁ|ZALOHOVA/i.test(whole.slice(0,240))?'proforma':'final');
+ const rows=lines.map(x=>String(x).replace(/\s+/g,' ').trim()).filter(Boolean);
+ const whole=rows.join('\n');
+ const kind=forcedKind||(/PROFORMA|ZÁLOHOVÁ|ZALOHOVA/i.test(whole.slice(0,300))?'proforma':'final');
  const patterns={
-  name:/^značka a model\s*:\s*(.*)$/i,
+  name:/^(?:značka a model|tovární značka)\s*:\s*(.*)$/i,
   plate:/^(?:RZ|SPZ)\s*:\s*(.*)$/i,
   vin:/^(?:č\.?\s*karoserie|VIN)\s*:\s*(.*)$/i,
   firstRegistration:/^datum (?:1\.|první) registrace\s*:\s*(.*)$/i,
   issued:/^datum vystavení\s*:\s*(.*)$/i,
+  taxableDate:/^(?:datum uskutečnění zdanitelného plnění|DUZP)\s*:\s*(.*)$/i,
   due:/^datum splatnosti\s*:\s*(.*)$/i,
-  amount:/^částka k úhradě\s*:\s*(.*)$/i
+  amount:/^(?:částka k úhradě|celkem)\s*:\s*(.*)$/i
  };
- const find=name=>{
+ const find=key=>{
   for(let i=0;i<rows.length;i++){
-   const match=rows[i].match(patterns[name]);if(!match)continue;
-   const after=(match[1]||'').trim();
-   if(after)return after;
-   if(rows[i+1]&&!Object.values(patterns).some(r=>r.test(rows[i+1])))return rows[i+1];
-  }return '';
+   const m=rows[i].match(patterns[key]);if(!m)continue;
+   if(m[1]?.trim())return m[1].trim();
+   if(i+1<rows.length&&!Object.values(patterns).some(p=>p.test(rows[i+1])))
+    return rows[i+1];
+  }
+  return '';
  };
- const dateText=s=>{const m=String(s).match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);if(!m)return '';const x=m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');return validDate(x)?x:'';};
- const rawMoney=find('amount').replace(/[^0-9,.-]/g,'').replace(/\.(?=\d{3}\b)/g,'').replace(',','.');
- const amount=rawMoney!==''&&Number.isFinite(Number(rawMoney))?Number(rawMoney):null;
+ const dateText=s=>{
+  const m=String(s).match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);if(!m)return '';
+  const x=m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return validDate(x)?x:'';
+ };
+ const amount=invoiceMoney(find('amount'));
  const vatEvidence=kind==='final'?extractInvoiceVAT(rows,amount):null;
- const matchNumber=whole.match(/(?:PROFORMA FAKTURA|ZÁLOHOVÁ FAKTURA|FAKTURA)\s*(?:č\.|číslo)\s*([0-9/-]{4,35})/i);
+ const numbered=whole.match(/(?:PROFORMA FAKTURA|ZÁLOHOVÁ FAKTURA|FAKTURA)\s*(?:č\.|číslo)\s*([0-9/-]{4,35})/i);
+ let documentNumber=numbered?.[1]||'';
+ if(!documentNumber){
+  const marker=rows.findIndex(x=>/daňový doklad č\.?\s*\/\s*variabilní symbol/i.test(x));
+  if(marker>=0){
+   const inline=rows[marker].match(/variabilní symbol\s*:\s*(\d{6,14})\b/i);
+   if(inline)documentNumber=inline[1];
+   else for(const x of rows.slice(marker+1,marker+5)){
+    if(/^\d{6,14}$/.test(x)){documentNumber=x;break;}
+   }
+  }
+ }
  const model=find('name').replace(/\s+(?:RZ|SPZ)\s*:.*$/i,'').trim();
  const vin=whole.match(/\b[A-HJ-NPR-Z0-9]{17}\b/i)?.[0]?.toUpperCase()||'';
  const plate=find('plate').match(/[A-Z0-9 ]{5,12}/i)?.[0]?.replace(/\s+/g,'').toUpperCase()||'';
- return {kind,number:matchNumber?.[1]||'',name:model,vin,plate,firstRegistration:dateText(find('firstRegistration')),
-  issued:dateText(find('issued')),due:dateText(find('due')),amount,vatRate:vatEvidence?.rate??null,vatExact:vatEvidence?.vat??null,
+ return {kind,number:documentNumber,name:model,vin,plate,firstRegistration:dateText(find('firstRegistration')),
+  taxableDate:dateText(find('taxableDate')),issued:dateText(find('issued')),due:dateText(find('due')),
+  amount,vatRate:vatEvidence?.rate??null,vatBase:vatEvidence?.base??null,vatExact:vatEvidence?.vat??null,
   supplier:rows.find(x=>/Drivalia Lease Czech Republic|Ayvens/i.test(x))||'',
-  dphDetailed:/\bDPH\s*(?:21|12)\s*%|základ daně/i.test(whole)};
+  dphDetailed:vatEvidence!==null};
 }
-
 
 function organizeVehicleFormSections(editing){
  const root=$('#dialog-content > .form-grid');
