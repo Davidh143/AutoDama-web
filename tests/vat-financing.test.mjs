@@ -38,7 +38,10 @@ test('final invoice clearly documenting 21% VAT pre-fills 49 560 Kč',()=>{
  assert.equal(r.vatExact,49560);
 });
 test('proforma, undocumented and inconsistent VAT never create claims',()=>{
- assert.equal(parser(['PROFORMA FAKTURA',...invoice('Sazba DPH 21 %: 236 000,00 49 560,00')]).vatExact,null);
+ const proforma=['PROFORMA FAKTURA',...invoice('Sazba DPH 21 %: 236 000,00 49 560,00')];
+ assert.equal(parser(proforma).vatExact,null);
+ assert.equal(parser(proforma,'final').kind,'proforma');
+ assert.equal(parser(proforma,'final').vatExact,null);
  assert.equal(parser(invoice('Bez rozpisu daně')).vatExact,null);
  assert.equal(parser(invoice('Sazba DPH 21 %: 236 000,00 48 560,00')).vatExact,null);
 });
@@ -107,6 +110,36 @@ test('previously uploaded final invoices have a one-click reconciliation path',(
  assert.ok(code.includes("function reconcileStoredPurchaseInvoices(vehicleId='')"));
  assert.ok(code.includes("reconcileInvoices:()=>reconcileStoredPurchaseInvoices()"));
  assert.ok(code.includes("action('Načíst DPH z uložených faktur','reconcileInvoices')"));
+});
+
+test('stored invoice reconciliation reads the newest pending final PDF and preserves confirmed deductions',async()=>{
+ const confirmed={...vehicle(),id:'confirmed',purchaseVatConfirmed:true,purchaseDeduction:50};
+ const pending={...vehicle(),id:'pending',vin:'TMBJG7NX7NY000002'};
+ const finalPdf=(id,v)=>({id,vehicleId:v.id,category:'Nákupní faktura',mime:'application/pdf',name:id+'.pdf'});
+ const state={
+  vehicles:[confirmed,pending],
+  documents:[finalPdf('confirmed',confirmed),finalPdf('old',pending),finalPdf('latest',pending),
+   {...finalPdf('proforma',pending),category:'Zálohová faktura'}]
+ };
+ const reads=[],errors=[];
+ const reconcile=vm.runInNewContext(
+  grab('function invoiceVehicleUpdate(','function vehicleForm(')+';reconcileStoredPurchaseInvoices',{
+   state,File,month:s=>s.slice(0,7),currentDay:()=> '2026-11-09',money:String,confirm:()=>true,
+   documentBlob:()=>new Blob(),readInvoicePdfLines:async file=>{
+    reads.push(file.name);
+    const vin=file.name==='confirmed.pdf'?confirmed.vin:pending.vin;
+    return drivaliaLayout.map(line=>line.replace('TMBJG7NX7NY000001',vin));
+   },
+   parseVehicleInvoice:parser,saved:async update=>update(state),toast:()=>{},alert:msg=>errors.push(msg)
+  });
+ await reconcile();
+ await reconcile(pending.id);
+ assert.deepEqual(reads,['latest.pdf']);
+ assert.deepEqual(errors,[]);
+ assert.equal(state.vehicles[0],confirmed);
+ assert.equal(state.vehicles[0].purchaseDeduction,50);
+ assert.equal(state.vehicles[1].purchaseVatExact,49560);
+ assert.equal(state.vehicles[1].purchaseVatConfirmed,true);
 });
 
 const capitalDependencies={
