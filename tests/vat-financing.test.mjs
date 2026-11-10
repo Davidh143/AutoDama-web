@@ -233,3 +233,49 @@ test('unreconciled tax filing cannot release VAT even after an incoming bank tra
  s.transactions=[{type:'vatRefund',periodId:'2026-11',date:'2027-01-25',amount:40000}];
  assert.equal(capital(s).vatReleasedOwn,0);
 });
+
+const checksFor=vm.runInNewContext(
+ grab('function recordedProfit(','function txSign(')+
+ grab('function financeChecks(','function renderFinanceChecks(')+';financeChecks',{
+  round,vatPart,month:s=>s?.slice(0,7)||'',isSold:v=>['sold','delivered'].includes(v.status)
+ });
+const purchases=vehicles=>({vehicles,costs:[],policies:[],transactions:[]});
+const confirmedPurchase=(id,extra={})=>({
+ ...vehicle(),id,status:'stock',bought:'2026-11-03',purchaseVatConfirmed:true,
+ purchaseVatExact:49560,purchaseDeduction:100,...extra
+});
+test('finance checks flag missing or mismatched funding and clear after correction',()=>{
+ const missing=confirmedPurchase('missing');
+ const mismatch=confirmedPurchase('mismatch',{funding:{ownerAmount:142780,investorAmount:142779.99}});
+ const s=purchases([
+  missing,mismatch,
+  confirmedPurchase('test',{test:true}),
+  confirmedPurchase('sold',{status:'sold',sale:300000}),
+  confirmedPurchase('unconfirmed',{purchaseVatConfirmed:false})
+ ]);
+ const result=checksFor(s);
+ assert.equal(result.funding.length,2);
+ assert.equal(result.funding[0].vehicle.id,'missing');
+ assert.equal(result.funding[0].deductible,49560);
+ assert.equal(result.funding[1].vehicle.id,'mismatch');
+ assert.equal(result.funding[1].total,285559.99);
+ missing.funding={ownerAmount:285560,investorAmount:0};
+ mismatch.funding.investorAmount=142780;
+ assert.equal(checksFor(s).funding.length,0);
+});
+test('possible duplicates only include purchases with a deduction in VAT evidence',()=>{
+ const first=confirmedPurchase('first',{purchaseInvoice:7654321});
+ const second=confirmedPurchase('second',{purchaseInvoice:' 7654321 ',purchasePeriod:'2026-12'});
+ const s=purchases([
+  first,second,
+  confirmedPurchase('test',{test:true,purchaseInvoice:'7654321'}),
+  confirmedPurchase('unconfirmed',{purchaseVatConfirmed:false,purchaseInvoice:'7654321'}),
+  confirmedPurchase('zero',{purchaseDeduction:0,purchaseInvoice:'7654321'}),
+  confirmedPurchase('without-number')
+ ]);
+ const result=checksFor(s);
+ assert.equal(result.duplicates.length,1);
+ assert.equal(result.duplicates[0].map(row=>row.vehicleId).join(','),'first,second');
+ second.purchaseInvoice='7654322';
+ assert.equal(checksFor(s).duplicates.length,0);
+});
