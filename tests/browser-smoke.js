@@ -13,11 +13,11 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
    replace:async s=>{s.meta.revision=state.meta.revision;await change(n=>Object.assign(n,s));},
    failNextSave:()=>{const normal=saveStore;saveStore=async()=>{saveStore=normal;throw Error('Testovaný výpadek ukládání');};}};
    download=(name,content)=>window.qa.downloads.push({name,content});`;
-  html=html.replace('await init();',hook+'\nawait init();');
+  html=html.replace('await init();',hook+'\nawait init();window.qa.ready=true;');
   const code=html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
   const hash=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(code)))));
   html=html.replace(/script-src 'sha256-[^']+'/,"script-src 'sha256-"+hash+"'");
-  frame.srcdoc=html;await wait(()=>frame.contentWindow.qa?.getState()?.vehicles);
+  frame.srcdoc=html;await wait(()=>frame.contentWindow.qa?.ready);
   const qa=frame.contentWindow.qa,doc=frame.contentDocument,find=selector=>doc.querySelector(selector),tick=()=>new Promise(r=>setTimeout(r,60));
   const set=(name,value)=>{const el=find('[name="'+name+'"]');el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));};
   const click=selector=>{const el=find(selector);check(el,'Chybí ovládací prvek '+selector);el.click();};
