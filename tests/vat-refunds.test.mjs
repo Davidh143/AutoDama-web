@@ -131,11 +131,20 @@ test('overpayments from old data are visible but never release more than the fil
 });
 test('partial refund cent allocations are exact, deterministic and never exceed any car share',()=>{
  const s=fixture();s.vehicles=[vehicle('a',1),vehicle('b',0),vehicle('c',.3)];file(s,-148680);
- for(let i=0;i<11;i++)refund(s,.01,'cent-'+i);
+ let previous=[0,0,0];
+ for(let i=0;i<11;i++){
+  refund(s,.01,'cent-'+(20-i));const next=api.vehicleVatLedger(s).rows.map(r=>r.refundReceived);
+  for(let j=0;j<next.length;j++)assert.ok(next[j]>=previous[j],'another receipt cannot take already released cents away');previous=next;
+ }
  const ledger=api.vehicleVatLedger(s),rows=ledger.rows;assert.equal(Math.round(rows.reduce((n,r)=>n+r.refundReceived,0)*100),11);
  for(const r of rows)assert.ok(r.refundReceived<=r.expectedRefund);
  refund(s,148679.89,'rest');assert.equal(api.vehicleVatLedger(s).periods[0].allocatedReceived,148680);
  for(const r of api.vehicleVatLedger(s).rows)assert.equal(r.refundReceived,r.expectedRefund);
  const big=api.vatSplitAmount(100000000,[{key:'a',weight:33333333.33},{key:'b',weight:66666666.67}]);
  assert.equal(big.get('a')+big.get('b'),100000000);
+});
+test('a refund to an EUR account uses its actual transaction rate for VAT and partner shares',()=>{
+ const s=fixture();s.accounts[0].currency='EUR';file(s);const t=refund(s,2000);t.rate=24.78;
+ assert.equal(summary(s).refundReceived,49560);assert.equal(api.capitalView(s).vatReceivedInv,34692);
+ assert.doesNotThrow(()=>api.validateVatRefundReceipt(s,t,t.id));
 });
