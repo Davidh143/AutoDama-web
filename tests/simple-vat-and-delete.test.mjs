@@ -81,6 +81,14 @@ test('borrowed and reassigned wheels are retained with valid links',()=>{
  const {next}=api.vehicleDeletionPlan(s,'one');api.assertState(next);assert.equal(next.wheelSets.length,2);
  assert.equal(next.wheelSets[0].assignedVehicleId,'two');assert.equal(next.wheelSets[0].sourceVehicleId,'');assert.equal(next.wheelSets[1].status,'available');assert.equal(next.wheelSets[1].sourceVehicleId,'two');
 });
+test('a shared EUR payment keeps the other car fully allocated after cent rounding',()=>{
+ const s=fixture();s.vehicles.push(car('two',0));s.accounts[0].currency='EUR';s.accounts[0].opening=0;
+ s.costs=[cost('c1','one'),cost('c2','two')];s.costs[0].amount=1200;s.costs[1].amount=1220;
+ for(const c of s.costs)Object.assign(c,{vatRate:0,deduction:0,vatExact:0});
+ s.transactions=[tx('eur-shared','cost',100,{rate:24.2,allocations:[{invoiceId:'cost:c1',amount:1200},{invoiceId:'cost:c2',amount:1220}]})];api.assertState(s);
+ const {next}=api.vehicleDeletionPlan(s,'one');api.assertState(next);assert.equal(next.transactions[0].amount,50.41);
+ assert.equal(Math.round(next.transactions[0].amount*next.transactions[0].rate*100)/100,1220);assert.equal(next.transactions[0].allocations[0].amount,1220);
+});
 test('shared monthly VAT and receipt survive deleting a car',()=>{
  const s=fixture();s.vehicles.push(car('two',0));const received=receive(s,84000).next;
  const {next}=api.vehicleDeletionPlan(received,'one');api.assertState(next);assert.equal(next.transactions[0].amount,84000);assert.equal(next.vatPeriods[0].actual,-84000);

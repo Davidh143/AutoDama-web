@@ -9,7 +9,7 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
  try{
   let html=await(await fetch('../index.html',{cache:'no-store'})).text();
   html=html.replace('enabled: true,','enabled: false,').replace("const DB='AutoDama-local-v2'","const DB='AutoDama-isolated-qa-"+crypto.randomUUID()+"'");
-  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,recordVatRefund,assertState,capitalView,vehicleVatSummary,readBackup,nav:name=>{view=name;render();},downloads:[],
+  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,recordVatRefund,assertState,capitalView,vehicleVatSummary,readBackup,nav:()=>{$('#overview-content').hidden=true;$('#workspace').hidden=false;$('#page-title').textContent='DPH';$('#breadcrumb').textContent='DPH';renderVAT();},downloads:[],
    replace:async s=>{s.meta.revision=state.meta.revision;await change(n=>Object.assign(n,s));},
    failNextSave:()=>{const normal=saveStore;saveStore=async()=>{saveStore=normal;throw Error('Testovaný výpadek ukládání');};}};
    download=(name,content)=>window.qa.downloads.push({name,content});`;
