@@ -9,7 +9,7 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
  try{
   let html=await(await fetch('../index.html',{cache:'no-store'})).text();
   html=html.replace('enabled: true,','enabled: false,').replace("const DB='AutoDama-local-v2'","const DB='AutoDama-isolated-qa-"+crypto.randomUUID()+"'");
-  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,recordVatRefund,assertState,capitalView,vehicleVatSummary,readBackup,downloads:[],
+  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,recordVatRefund,assertState,capitalView,vehicleVatSummary,readBackup,nav:name=>{view=name;render();},downloads:[],
    replace:async s=>{s.meta.revision=state.meta.revision;await change(n=>Object.assign(n,s));},
    failNextSave:()=>{const normal=saveStore;saveStore=async()=>{saveStore=normal;throw Error('Testovaný výpadek ukládání');};}};
    download=(name,content)=>window.qa.downloads.push({name,content});`;
@@ -27,7 +27,7 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   fixture.vehicles=[{id:'one',name:'Testovací Octavia',year:2021,km:50000,plate:'TEST',vin:'TMBJG7NX7NY000001',status:'stock',test:false,review:false,
    bought:'2026-08-10',stockDate:'2026-08-10',purchase:242000,purchaseCurrency:'CZK',purchaseRate:1,purchaseVatRate:21,purchaseVatExact:42000,purchaseDeduction:100,purchaseVatConfirmed:true,purchasePeriod:'2026-08',purchaseDocumentDate:'2026-08-10',purchaseInvoice:'P-one',purchaseOpening:false,
    vat:'standard',sale:null,sold:'',saleCurrency:'CZK',saleRate:1,saleVatRate:21,saleVatExact:null,salePeriod:'',saleOpening:false,helperPercent:0,profitMode:'calculated',eu:{},funding:{purchaseCash:242000,ownerAmount:121000,investorAmount:121000,investorFraction:.5,investorProfitPercent:35,helperProfitPercent:0}}];
-  phase='Jednoduchá obrazovka DPH';await qa.replace(fixture);click('a[data-view="vat"]');await tick();
+  phase='Jednoduchá obrazovka DPH';await qa.replace(fixture);qa.nav('vat');await tick();
   check(doc.body.textContent.includes('DPH · kolik čekáš a kolik už přišlo'),'Chybí přehled vratek');
   const accounting=[...doc.querySelectorAll('details')].find(el=>el.firstElementChild.textContent==='Podrobnosti pro účetní a měsíční přiznání');check(accounting&&!accounting.open,'Účetní podrobnosti musí být sbalené');pass('Přehled DPH se otevře s auty a sbalenými účetními podrobnostmi.');
   phase='Částečná vratka';qa.recordVatRefund('2026-08');set('refundAmount','12000');
@@ -49,7 +49,7 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   phase='PDF bez textu';qa.vehicleForm(id);await upload('salesInvoiceFiles','scan.pdf');await wait(()=>find('[data-sales-attach]'));click('[data-sales-attach]');await save(()=>qa.getState().documents.length===3);check(qa.getState().vehicles[0].sale===25200,'Příloha změnila cenu prodeje');pass('PDF bez čitelného textu jde uložit jako přílohu a ponechá hodnoty prodeje.');
   phase='Záloha a kompletní smazání';qa.deleteVehicleForm(id);find('[name="confirmVehicleDelete"]').checked=true;await save(()=>qa.getState().vehicles.length===0);
   const backup=JSON.parse(qa.downloads.at(-1).content);await qa.readBackup(backup);check(backup.data.documents.length===3,'V záloze chybí přílohy');check(qa.getState().documents.length===0,'V aktivní evidenci zůstaly přílohy');pass('Kompletní smazání vytvoří ověřenou zálohu všech tří PDF a odstraní auto i přílohy.');
-  phase='Náhled po testu';await qa.replace(fixture);qa.recordVatRefund('2026-08');set('refundAmount','12000');await save(()=>qa.getState().transactions.length===1);click('a[data-view="vat"]');
+  phase='Náhled po testu';await qa.replace(fixture);qa.recordVatRefund('2026-08');set('refundAmount','12000');await save(()=>qa.getState().transactions.length===1);qa.nav('vat');
   status.textContent='Hotovo: všech 7 scénářů prošlo. Níže je fiktivní přehled DPH.';status.className='ok';document.title='AutoDama QA · 7/7 OK';
  }catch(error){status.textContent='Test selhal ('+phase+'): '+error.message;status.className='fail';document.title='AutoDama QA · CHYBA';console.error(phase,error);}
 })();
