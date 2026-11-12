@@ -33,7 +33,7 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   phase='Částečná vratka';qa.recordVatRefund('2026-08');set('refundAmount','12000');
   check(/6\s*000/.test(find('#simpleRefundPreview').textContent),'Nesprávný náhled rozdělení vratky');await save(()=>qa.getState().transactions.length===1);
   check(qa.capitalView(qa.getState()).vatReceivedInv===6000,'Nesprávné uvolnění kapitálu investora');check(qa.getState().vatPeriods[0].filed==='','Evidence nesmí vymýšlet podané přiznání');pass('Zápis 12 000 Kč uvolní investorovi přesně 6 000 Kč a nezadává fiktivní přiznání.');
-  phase='Potvrzení mazání';qa.vehicleForm('one');click('#delete');click('#save');await tick();check(find('#error').textContent.includes('Nejprve potvrď'),'Chybí potvrzení smazání');click('#cancel');check(qa.getState().vehicles.length===1,'Zrušení změnilo data');
+  phase='Potvrzení mazání';qa.vehicleForm('one');click('#delete');await wait(()=>!find('#delete').disabled);click('#save');await tick();check(find('#error').textContent.includes('Nejprve potvrď'),'Chybí potvrzení smazání');click('#cancel');check(qa.getState().vehicles.length===1,'Zrušení změnilo data');
   qa.deleteVehicleForm('one');find('[name="confirmVehicleDelete"]').checked=true;qa.failNextSave();click('#save');await wait(()=>find('#error').textContent.includes('výpadek'));check(qa.getState().vehicles.length===1,'Selhání uložení změnilo stav');click('#cancel');pass('Zrušení mazání i simulovaný výpadek zachovají původní auto a všechny údaje.');
   await qa.replace(fixture);const blank=qa.getState();blank.vehicles=[];await qa.replace(blank);
   phase='Nákupní PDF';qa.vehicleForm();
