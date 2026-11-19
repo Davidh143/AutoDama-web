@@ -107,7 +107,7 @@ test('VAT on costs stays with its car, is released only once, and does not chang
  const s=fixture();s.costs.push({id:'repair',name:'Repair',vehicleId:'car',amount:12100,currency:'CZK',rate:1,vatRate:21,deduction:100,vatExact:2100,date:'2026-08-12',period:'2026-08',openingPaid:true});
  file(s,-51660);const before=api.capitalView(s);assert.equal(summary(s).costInput,2100);refund(s,51660);
  const after=api.capitalView(s);assert.equal(after.freeInv-before.freeInv,36162);assert.equal(after.tiedInv,165200);
- sell(s.vehicles[0]);const profit=api.vehicleFinancial(s,s.vehicles[0]).profit;assert.equal(profit,84000);assert.equal(summary(s).pendingInput,0);
+ sell(s.vehicles[0]);const result=api.vehicleFinancial(s,s.vehicles[0]);assert.equal(result.preProfit,84000);assert.equal(result.profit,71400);assert.equal(summary(s).pendingInput,0);
 });
 test('receipts before the bank opening settle old claims without counting the bank cash again',()=>{
  const s=fixture();s.accounts[0].openingDate='2026-10-01';file(s);refund(s,49560,'history','2026-09-25');

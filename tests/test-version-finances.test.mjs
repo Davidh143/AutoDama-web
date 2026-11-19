@@ -4,21 +4,26 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
+const script=html=>html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
+function modelFor(code){
+ const grab=(start,end)=>{
+  const first=code.indexOf(start),last=code.indexOf(end,first);
+  assert.ok(first>=0&&last>first,start);
+  return code.slice(first,last);
+ };
+ return vm.runInNewContext(
+  grab('const currentDay=','function migrateV1(').replace(/const currentDay=[^\n]+/,"const currentDay=()=> '2026-12-20';")+
+  grab('function recordedProfit(','function euWarnings(')+grab('function validDate(','function canonical(')+
+  grab('function allocateResult(','/* Ledger movements are explicit')+grab('function fundingSplit(','function fundingFormFields(')+
+  ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow})',
+  {getCloudStore:()=>null,cloudMode:()=>false,roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
+   finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
+ );
+}
 const html=readFileSync(new URL('../test/index.html',import.meta.url),'utf8');
-const code=html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
-const grab=(start,end)=>{
- const first=code.indexOf(start),last=code.indexOf(end,first);
- assert.ok(first>=0&&last>first,start);
- return code.slice(first,last);
-};
-const api=vm.runInNewContext(
- grab('const currentDay=','function migrateV1(').replace(/const currentDay=[^\n]+/,"const currentDay=()=> '2026-12-20';")+
- grab('function recordedProfit(','function euWarnings(')+grab('function validDate(','function canonical(')+
- grab('function allocateResult(','/* Ledger movements are explicit')+grab('function fundingSplit(','function fundingFormFields(')+
- ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow})',
- {getCloudStore:()=>null,cloudMode:()=>false,roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
-  finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
-);
+const code=script(html),api=modelFor(code);
+const production=readFileSync(new URL('../index.html',import.meta.url),'utf8');
+const productionCode=script(production),live=modelFor(productionCode);
 
 function car(id,more={}){
  return {id,name:id,year:null,km:null,plate:'',status:'sold',test:false,review:false,
@@ -101,4 +106,31 @@ test('payouts before opening count against the helper balance without changing t
  assert.equal(api.helperLedger(s).paid,2450);
  assert.equal(api.helperLedger(s).balance,5050);
  assert.equal(api.cashAt(s),24500000);
+});
+
+test('production stays connected to shared data and compatible bank expenses count once as helper payouts',()=>{
+ assert.match(productionCode,/const CLOUD_CONFIG=Object\.freeze\(\{\s*enabled: true,/);
+ assert.match(productionCode,/const DB='AutoDama-local-v2'/);
+ assert.doesNotMatch(production,/AutoDama-SANDBOX|Zkušební kapitál|id="autodama-initial-data"/);
+ const s=stateWith(car('Prodané auto'));
+ s.transactions.push({...payout('bank-payout',2500,{accountId:'bank',note:''}),type:'operating',helperPayout:true});
+ s.helperPayouts=[{id:'no-bank',amount:1000,date:'2026-12-12',note:''}];
+ live.assertState(s);
+ assert.equal(live.helperLedger(s).earned,7500);
+ assert.equal(live.helperLedger(s).paid,3500);
+ assert.equal(live.helperLedger(s).balance,4000);
+ assert.equal(live.financeDashboard(s).invoiceDebt,4000);
+ assert.equal(live.cashAt(s),997500);
+ assert.equal(live.cashflow(s,'2026-12').groups.operating,-2500);
+ s.helperPayouts.push({...s.helperPayouts[0],id:'bank-payout'});
+ assert.throws(()=>live.assertState(s),/duplicitní výplata/);
+});
+
+test('pending production VAT stays out of the monthly estimate until confirmed',()=>{
+ const v=car('Auto',{purchaseVatConfirmed:false}),s=stateWith(v);
+ live.assertState(s);
+ assert.equal(live.vatResult(s,'2026-11').purchases,0);
+ assert.equal(live.vatResult(s,'2026-11').sales,52500);
+ v.purchaseVatConfirmed=true;
+ assert.equal(live.vatResult(s,'2026-11').result,10500);
 });
