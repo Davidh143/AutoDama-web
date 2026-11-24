@@ -82,6 +82,41 @@ test('the 15% is calculated on each positive sale, including a recorded historic
  assert.deepEqual(Array.from(ledger.earnings,r=>[r.v.id,r.amount]),[['Prodej',7350],['Import z tabulky',4500],['Ztráta',0]]);
 });
 
+test('the test app estimates income tax on the profit after costs and the helper',()=>{
+ const v=car('Skaut',{purchase:488000,purchaseVatExact:84694,vat:'eu',sale:25200,
+  saleCurrency:'EUR',saleRate:24.18,saleVatExact:0});
+ const s=stateWith(v);
+ const result=api.vehicleFinancial(s,v);
+ assert.equal(result.profit,175125.50);
+ assert.equal(result.incomeTaxEstimate,26268.83);
+ assert.equal(result.profitAfterIncomeTax,148856.67);
+ assert.equal(api.financeDashboard(s,'2026-11-30').afterTax.month,148856.67);
+ assert.equal(api.helperLedger(s).earned,30904.50);
+
+ s.settings.taxLow=20;
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,140100.40);
+ assert.equal(api.helperLedger(s).earned,30904.50);
+});
+
+test('the after-tax totals preserve recorded amounts, losses, and the date and test filters',()=>{
+ const recorded=car('Uzavřený výdělek',{profitMode:'recorded',recordedProfit:120366});
+ const beforeTax=car('Zadaný výdělek před daní',{profitMode:'recorded',recordedProfit:100000,
+  recordedProfitAfterIncomeTax:false,bought:'2026-10-10',stockDate:'2026-10-10',purchasePeriod:'2026-10',
+  purchaseDocumentDate:'2026-10-10',sold:'2026-10-20',salePeriod:'2026-10'});
+ const loss=car('Ztráta',{profitMode:'recorded',recordedProfit:-5000,recordedProfitAfterIncomeTax:false});
+ const undated=car('Prodej bez data',{profitMode:'recorded',recordedProfit:30000,sold:'',salePeriod:'',review:true});
+ const s=stateWith(recorded,beforeTax,loss,undated,car('Testovací',{test:true}));
+ api.assertState(s);
+ assert.equal(api.vehicleFinancial(s,recorded).profitAfterIncomeTax,120366);
+ assert.equal(api.vehicleFinancial(s,recorded).incomeTaxEstimate,null);
+ assert.equal(api.vehicleFinancial(s,loss).incomeTaxEstimate,0);
+ const totals=api.financeDashboard(s,'2026-11-30').afterTax;
+ assert.equal(totals.month,115366);
+ assert.equal(totals.previous,85000);
+ assert.equal(totals.undated,30000);
+ assert.equal(totals.total,230366);
+});
+
 test('old payments and new partial payouts count once, with cash movement only on the selected account',()=>{
  const s=stateWith(car('dříve-párováno',{helperPercent:10}),car('starší-hotovost',{helperPercent:5,helperOpening:true}));
  s.transactions.push({...payout('old',2000,{accountId:'bank',date:'2026-11-23'}),type:'cost',
