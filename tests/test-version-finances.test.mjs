@@ -60,6 +60,33 @@ test('monthly VAT adds both domestic documents, keeps the EU credit and counts e
  assert.equal(api.vatResult(s,'2026-12').result,104132.23);
 });
 
+test('pending purchase VAT is excluded from profit, the helper amount and the monthly VAT estimate',()=>{
+ const v=car('Odpočet k ověření',{purchaseVatConfirmed:false});
+ const s=stateWith(v);
+ const pending=api.vehicleFinancial(s,v);
+ assert.equal(pending.pendingPurchaseVat,42000);
+ assert.equal(pending.preProfit,8000);
+ assert.equal(pending.helper,1200);
+ assert.equal(pending.profitAfterIncomeTax,5780);
+ assert.equal(api.vatResult(s,'2026-11').purchases,0);
+
+ v.purchaseVatConfirmed=true;
+ assert.equal(api.vehicleFinancial(s,v).preProfit,50000);
+ assert.equal(api.vatResult(s,'2026-11').result,10500);
+});
+
+test('a sale with known dates and price can be saved while its VAT mode is pending',()=>{
+ const v=car('Prodej k ověření',{vat:'pending'});
+ const s=stateWith(v);
+ api.assertState(s);
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,null);
+ const vat=api.vatResult(s,'2026-11');
+ assert.equal(vat.unknownSales,true);
+ assert.equal(vat.lines.find(line=>line.kind==='sale').output,null);
+ v.vat='standard';
+ assert.equal(api.vatResult(s,'2026-11').unknownSales,false);
+});
+
 test('the 15% is calculated on each positive sale, including a recorded historical result',()=>{
  const live=car('Prodej',{helperPercent:5,funding:{purchaseCash:242000,ownerAmount:121000,investorAmount:121000,
   investorFraction:.5,investorProfitPercent:35,helperProfitPercent:5}});
