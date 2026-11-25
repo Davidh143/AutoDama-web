@@ -19,7 +19,7 @@ function modelFor(code,manualVat=false){
    grab('const SALES_INVOICE_KINDS=','const salesNorm=')+grab('function salesInvoicePatch(','function stagePurchaseInvoiceDocuments(')+
    grab('function salesInvoiceMetadata(','function simplifyVehicleForm('):'')+
   ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow'+
-  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments':'')+'})',
+  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,vatBankMonth':'')+'})',
   {getCloudStore:()=>null,cloudMode:()=>false,crypto:{randomUUID:()=> 'fixture-document'},roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
    finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
  );
@@ -245,6 +245,66 @@ test('the 15% is calculated on each positive sale, including a recorded historic
  const ledger=api.helperLedger(s);
  assert.equal(ledger.earned,11850);
  assert.deepEqual(Array.from(ledger.earnings,r=>[r.v.id,r.amount]),[['Prodej',7350],['Import z tabulky',4500],['Ztráta',0]]);
+});
+
+test('monthly split uses one opening balance and the same profit base for both percentages',()=>{
+ const carInPool=car('Společný prodej',{bought:'2026-10-20',stockDate:'2026-10-20',purchasePeriod:'2026-10',purchaseDocumentDate:''});
+ const oldCar=car('Původní prodej',{bought:'2026-10-10',stockDate:'2026-10-10',purchasePeriod:'2026-10',
+  purchaseDocumentDate:'',sold:'2026-10-25',salePeriod:'2026-10'});
+ const s=stateWith(carInPool,oldCar);
+ s.monthlyDeal={startDate:'2026-11-08',owner:1500000,investor:1500000,months:[]};
+ const movement=(id,type,amount,date,capitalParty='owner')=>({id,type,amount,date,accountId:'',rate:1,capitalParty,allocations:[]});
+ s.transactions.push(movement('personal','withdrawal',45000,'2026-11-27'));
+ assert.equal(api.helperLedger(s).earned,7500,'only the earlier sale earns an individual commission');
+ assert.equal(api.vehicleFinancial(s,carInPool).helper,0);
+ assert.equal(api.monthlyProfitEstimate(s,'2026-11').profit,42500);
+ const m=api.saveMonthlySplit(s,'2026-11',120000,'2026-12-01');
+ assert.deepEqual([m.opening.owner,m.opening.investor,m.investorRate,m.investor,m.helper,m.owner],
+  [1500000,1500000,17.5,21000,18000,81000]);
+ assert.equal(api.helperLedger(s).earned,25500);
+ assert.equal(api.cashAt(s),1000000,'book entries and allocation do not move bank cash');
+ assert.throws(()=>api.saveMonthlySplit(s,'2026-11',120000),/otevřený měsíc/);
+ const dec=api.monthlyCapitalBefore(s,'2026-12-01');
+ assert.deepEqual([dec.owner,dec.investor],[1536000,1521000]);
+ assert.equal(api.monthlySplit(dec,0).investorRate.toFixed(2),'17.41');
+
+ s.transactions.push(movement('investor-out','withdrawal',21000,'2026-12-02','investor'));
+ assert.equal(api.monthlyCapitalBefore(s,'2026-12-01').investor,1521000);
+ assert.equal(api.monthlyCapitalBefore(s,'2027-01-01').investor,1500000);
+ assert.equal(api.financeDashboard(s).withdrawnYear,45000);
+ const loss=api.saveMonthlySplit(s,'2026-12',-10000,'2026-12-20');
+ assert.equal(loss.helper,0);
+ assert.equal(loss.investor,-1741.41);
+ assert.equal(loss.owner,-8258.59);
+ assert.equal(api.helperLedger(s).earned,25500);
+ api.assertState(s);
+ api.reopenMonthlySplit(s,'2026-12');
+ api.reopenMonthlySplit(s,'2026-11');
+ assert.equal(api.nextMonthlyPeriod(s.monthlyDeal),'2026-11');
+ api.assertState(s);
+});
+
+test('a bank VAT receipt with unknown destination period changes bank cash once and leaves the split base intact',()=>{
+ const v=car('Auto',{purchaseVatClaim:42000,saleVatAmount:52500});
+ const s=stateWith(v);
+ s.monthlyDeal={startDate:'2026-11-01',owner:1500000,investor:2500000,months:[]};
+ const before=api.monthlyProfitEstimate(s,'2026-11');
+ const t={id:'bank-vat',type:'vatRefund',date:'2026-12-18',periodId:'',amount:80000,
+  rate:1,accountId:'bank',vatCashOnly:true,allocations:[],taxRelevant:false,taxVat:0};
+ s.transactions.push(t);
+ api.assertState(s);
+ assert.equal(api.cashAt(s),1080000);
+ assert.equal(api.vatBankMonth(s,'2026-12').received,80000);
+ assert.equal(api.vatBankMonth(s,'2026-11').received,0);
+ assert.equal(api.monthlyVatCheck(s,'2026-11').received,0);
+ assert.equal(api.monthlyCapitalBefore(s,'2027-01-01').investor,2500000);
+ assert.deepEqual(api.monthlyProfitEstimate(s,'2026-11'),before);
+
+ t.periodId='2026-11';
+ assert.equal(api.monthlyVatCheck(s,'2026-11').received,80000);
+ assert.equal(api.vatBankMonth(s,'2026-12').received,80000);
+ assert.equal(api.vehicleVatLedger(s).rows.find(r=>r.vehicleId===v.id).refundReceived,0);
+ assert.equal(api.monthlySplit({owner:0,investor:2000000},100000).investor,35000);
 });
 
 test('the test app estimates income tax on the profit after costs and the helper',()=>{
