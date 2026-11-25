@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const script=html=>html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
-function modelFor(code){
+function modelFor(code,manualVat=false){
  const grab=(start,end)=>{
   const first=code.indexOf(start),last=code.indexOf(end,first);
   assert.ok(first>=0&&last>first,start);
@@ -15,13 +15,15 @@ function modelFor(code){
   grab('const currentDay=','function migrateV1(').replace(/const currentDay=[^\n]+/,"const currentDay=()=> '2026-12-20';")+
   grab('function recordedProfit(','function euWarnings(')+grab('function validDate(','function canonical(')+
   grab('function allocateResult(','/* Ledger movements are explicit')+grab('function fundingSplit(','function fundingFormFields(')+
-  ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow})',
+  (manualVat?grab('function vatSplitAmount(','function fundingSplit('):'')+
+  ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow'+
+  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement':'')+'})',
   {getCloudStore:()=>null,cloudMode:()=>false,roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
    finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
  );
 }
 const html=readFileSync(new URL('../test/index.html',import.meta.url),'utf8');
-const code=script(html),api=modelFor(code);
+const code=script(html),api=modelFor(code,true);
 const production=readFileSync(new URL('../index.html',import.meta.url),'utf8');
 const productionCode=script(production),live=modelFor(productionCode);
 
@@ -85,6 +87,84 @@ test('a sale with known dates and price can be saved while its VAT mode is pendi
  assert.equal(vat.lines.find(line=>line.kind==='sale').output,null);
  v.vat='standard';
  assert.equal(api.vatResult(s,'2026-11').unknownSales,false);
+});
+
+test('entered vehicle VAT is authoritative and the check only reports the difference',()=>{
+ const v=car('Slovenský prodej',{purchase:484000,purchaseVatExact:84000,purchaseVatConfirmed:false,purchaseVatClaim:83999.75,
+  sale:12100,saleCurrency:'EUR',saleRate:25,saleVatAmount:0,vat:'eu'});
+ const s=stateWith(v);
+ api.assertState(s);
+ const before=JSON.stringify(v),check=api.vehicleVatCheck(v);
+ assert.equal(check.purchase.expected,84000);
+ assert.equal(check.purchase.difference,-.25);
+ assert.equal(check.sale.expected,0);
+ assert.equal(check.sale.difference,0);
+ assert.equal(JSON.stringify(v),before);
+ assert.equal(api.vatResult(s,'2026-11').result,-83999.75);
+ assert.equal(api.vehicleFinancial(s,v).purchaseVat,83999.75);
+
+ v.vat='standard';
+ v.saleVatAmount=50000;
+ assert.equal(api.vehicleVatCheck(v).sale.expected,52500);
+ assert.equal(api.vehicleFinancial(s,v).saleVat,50000);
+});
+
+test('empty VAT stays open for review and zero is a recorded amount',()=>{
+ const v=car('Ruční VAT',{purchaseVatClaim:null,saleVatAmount:null});
+ const s=stateWith(v);
+ s.costs.push({id:'transport',vehicleId:v.id,name:'Doprava',date:'2026-11-11',period:'2026-11',
+  amount:1210,currency:'CZK',rate:1,vatRate:21,deduction:100,vatClaim:null});
+ api.assertState(s);
+ assert.equal(api.vatResult(s,'2026-11').missingAmounts,3);
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,null);
+ assert.equal(api.vehicleVatCheck(v).sale.entered,null);
+
+ Object.assign(v,{vat:'pending',purchaseVatClaim:0,saleVatAmount:0});
+ s.costs[0].vatClaim=100;
+ api.assertState(s);
+ const r=api.vatResult(s,'2026-11');
+ assert.equal(r.missingAmounts,0);
+ assert.equal(r.result,-100);
+ assert.equal(api.vehicleFinancial(s,v).costNet,1110);
+ assert.equal(api.vehicleFinancial(s,v).saleVat,0);
+ assert.equal(api.vehicleVatCheck(v).sale.expected,null);
+});
+
+test('a refund can be recorded without a bank account, filing, or a full vehicle assignment',()=>{
+ const v=car('Scout',{vat:'eu',purchaseVatClaim:42000,saleVatAmount:0}),s=stateWith(v);
+ const t={id:'refund',type:'vatRefund',date:'2026-12-18',periodId:'2026-11',amount:40000,
+  rate:1,accountId:'',allocations:[],vatShares:[]};
+ const profit=api.vehicleFinancial(s,v).profitAfterIncomeTax;
+ s.transactions.push(t);
+ api.assertState(s);
+ assert.equal(api.cashAt(s),1000000);
+ assert.equal(api.monthlyVatCheck(s,'2026-11').paymentComparison.difference,2000);
+ assert.equal(api.vehicleVatLedger(s).periods.find(p=>p.id==='2026-11').unallocatedReceived,40000);
+
+ t.vatShares.push({vehicleId:v.id,amount:25000});
+ api.assertState(s);
+ const row=api.vehicleVatLedger(s).rows.find(r=>r.vehicleId===v.id&&r.period==='2026-11');
+ assert.equal(row.refundReceived,25000);
+ assert.equal(row.pendingInput,17000);
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,profit);
+ assert.equal(api.vehicleVatLedger(s).periods.find(p=>p.id==='2026-11').unallocatedReceived,15000);
+
+ t.vatShares[0].amount=40000.01;
+ assert.throws(()=>api.assertState(s),/přesahuje přijatou vratku/);
+});
+
+test('declared VAT and movements can be recorded when they disagree, without inventing an extra liability',()=>{
+ const v=car('Prodej',{purchaseVatClaim:42000,saleVatAmount:52500}),s=stateWith(v);
+ const p={id:'2026-11',status:'Podáno',actual:10000,filed:'2026-12-10'};
+ s.vatPeriods.push(p);
+ s.transactions.push({id:'paid',type:'vatPayment',date:'2026-12-18',periodId:p.id,amount:10500,rate:1,
+  accountId:'bank',allocations:[]});
+ api.assertState(s);
+ const check=api.monthlyVatCheck(s,p.id);
+ assert.equal(check.declaredComparison.difference,-500);
+ assert.equal(check.paymentComparison.difference,500);
+ assert.equal(api.periodSettlement(s,p).outstanding,0);
+ assert.equal(api.cashAt(s),989500);
 });
 
 test('the 15% is calculated on each positive sale, including a recorded historical result',()=>{
