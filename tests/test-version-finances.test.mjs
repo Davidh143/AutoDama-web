@@ -15,10 +15,12 @@ function modelFor(code,manualVat=false){
   grab('const currentDay=','function migrateV1(').replace(/const currentDay=[^\n]+/,"const currentDay=()=> '2026-12-20';")+
   grab('function recordedProfit(','function euWarnings(')+grab('function validDate(','function canonical(')+
   grab('function allocateResult(','/* Ledger movements are explicit')+grab('function fundingSplit(','function fundingFormFields(')+
-  (manualVat?grab('function vatSplitAmount(','function fundingSplit('):'')+
+  (manualVat?grab('function vatSplitAmount(','function fundingSplit(')+
+   grab('const SALES_INVOICE_KINDS=','const salesNorm=')+grab('function salesInvoicePatch(','function stagePurchaseInvoiceDocuments(')+
+   grab('function salesInvoiceMetadata(','function simplifyVehicleForm('):'')+
   ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow'+
-  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement':'')+'})',
-  {getCloudStore:()=>null,cloudMode:()=>false,roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
+  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments':'')+'})',
+  {getCloudStore:()=>null,cloudMode:()=>false,crypto:{randomUUID:()=> 'fixture-document'},roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
    finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
  );
 }
@@ -165,6 +167,62 @@ test('declared VAT and movements can be recorded when they disagree, without inv
  assert.equal(check.paymentComparison.difference,500);
  assert.equal(api.periodSettlement(s,p).outstanding,0);
  assert.equal(api.cashAt(s),989500);
+});
+
+test('a single manual purchase claim can be saved on a sold and already financed car',()=>{
+ const v=car('Prodané auto',{vat:'eu',purchaseVatClaim:null,purchaseInvoice:'',purchaseDocumentDate:'',
+  purchaseVatConfirmed:false,saleVatAmount:null,profitMode:'recorded',recordedProfit:30000,
+  funding:{purchaseCash:242000,ownerAmount:145200,investorAmount:96800,investorFraction:.4,
+   investorProfitPercent:35,helperProfitPercent:15}});
+ const s=stateWith(v),before={...v};
+ api.setPurchaseVatClaim(s,v.id,40000,'2026-12');
+ api.assertState(s);
+ assert.deepEqual(v,{...before,purchaseVatClaim:40000},'the action changes only the purchase claim');
+ assert.equal(api.vatResult(s,'2026-11').purchases,40000);
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,30000);
+ api.setPurchaseVatClaim(s,v.id,0,'2026-12');
+ assert.equal(api.vatResult(s,'2026-11').purchases,0);
+});
+
+test('an assigned refund releases tied capital across months according to the original funding',()=>{
+ const v=car('Sklad',{purchase:363000,status:'stock',sale:null,sold:'',salePeriod:'',purchaseVatClaim:60000,
+  funding:{purchaseCash:363000,ownerAmount:217800,investorAmount:145200,investorFraction:.4,
+   investorProfitPercent:35,helperProfitPercent:15}});
+ const s=stateWith(v);
+ s.capital={owner:1000000,investor:1000000,asOf:'2026-11-01'};
+ const movement={id:'refund',type:'vatRefund',date:'2026-12-18',periodId:'2026-12',
+  amount:50000,rate:1,accountId:'',allocations:[],vatShares:[]};
+ s.transactions.push(movement);
+ const unassigned=api.capitalView(s);
+ assert.equal(unassigned.vatReleasedOwn,0);
+ assert.equal(unassigned.vatReleasedInv,0);
+ movement.vatShares=[{vehicleId:v.id,amount:50000}];
+ api.assertState(s);
+ const assigned=api.capitalView(s);
+ assert.equal(assigned.freeOwn-unassigned.freeOwn,30000);
+ assert.equal(assigned.freeInv-unassigned.freeInv,20000);
+ assert.equal(assigned.own,unassigned.own);
+ assert.equal(assigned.inv,unassigned.inv);
+ assert.equal(assigned.vatReceivedInv,20000);
+ assert.equal(s.transactions.length,1);
+});
+
+test('a sales PDF can be attached before review, and its VAT fields do not block price prefill',()=>{
+ const v=car('Prodej',{saleVatAmount:0});
+ const s=stateWith(v);
+ const info={kind:'invoice',number:'SYNTHETIC',currency:'CZK',taxableDate:'2026-11-20',total:302500,
+  settledAdvances:null,balanceDue:null,vin:'',vatMode:'eu',vatId:'SK?',vatRate:null,exemptionText:''};
+ const patch=api.salesInvoicePatch(v,info);
+ assert.equal(patch.sale,302500);
+ assert.equal(patch.vat,undefined);
+ assert.equal(patch.saleVatAmount,undefined);
+ assert.equal(patch.vatId,undefined);
+ api.stageSalesInvoiceDocuments(s,v.id,[{fileName:'Fiktivní faktura.pdf',hash:'synthetic-pdf',
+  info,attachment:{mime:'application/pdf',data:'JVBERi0xLjQK'},applied:false}]);
+ api.assertState(s);
+ assert.equal(s.documents[0].vehicleId,v.id);
+ assert.equal(s.documents[0].salesInvoiceData,undefined);
+ assert.equal(v.saleVatAmount,0);
 });
 
 test('the 15% is calculated on each positive sale, including a recorded historical result',()=>{
