@@ -71,8 +71,8 @@ test('pending purchase VAT is excluded from profit, the helper amount and the mo
  const pending=api.vehicleFinancial(s,v);
  assert.equal(pending.pendingPurchaseVat,42000);
  assert.equal(pending.preProfit,8000);
- assert.equal(pending.helper,1200);
- assert.equal(pending.profitAfterIncomeTax,5780);
+ assert.equal(pending.helper,1020);
+ assert.equal(pending.profitAfterIncomeTax,6800);
  assert.equal(api.vatResult(s,'2026-11').purchases,0);
 
  v.purchaseVatConfirmed=true;
@@ -246,7 +246,7 @@ test('a sales PDF can be attached before review, and its VAT fields do not block
  assert.equal(v.saleVatAmount,0);
 });
 
-test('the 15% is calculated on each positive sale, including a recorded historical result',()=>{
+test('the 15% is calculated on positive after-tax earnings, including a recorded historical result',()=>{
  const live=car('Prodej',{helperPercent:5,funding:{purchaseCash:242000,ownerAmount:121000,investorAmount:121000,
   investorFraction:.5,investorProfitPercent:35,helperProfitPercent:5}});
  const past=car('Import z tabulky',{sold:'',salePeriod:'',vat:'pending',review:true,profitMode:'recorded',recordedProfit:30000});
@@ -256,16 +256,17 @@ test('the 15% is calculated on each positive sale, including a recorded historic
   currency:'CZK',rate:1,vatRate:21,deduction:100,vatExact:210});
  api.assertState(s);
  assert.equal(api.vehicleFinancial(s,live).preProfit,49000);
- assert.equal(api.vehicleFinancial(s,live).helper,7350);
- assert.equal(api.vehicleFinancial(s,live).profit,41650);
+ assert.equal(api.vehicleFinancial(s,live).profitAfterIncomeTax,41650);
+ assert.equal(api.vehicleFinancial(s,live).helper,6247.5);
+ assert.equal(api.vehicleFinancial(s,live).profit,42752.5);
  const split=api.fundingSplit(s,live);
  assert.equal(split.investor,8575);
- assert.equal(split.helper,7350);
- assert.equal(split.owner,33075);
+ assert.equal(split.helper,6247.5);
+ assert.equal(split.owner,34177.5);
  assert.equal(api.vehicleFinancial(s,past).profit,30000,'previously recorded profit is preserved');
  const ledger=api.helperLedger(s);
- assert.equal(ledger.earned,11850);
- assert.deepEqual(Array.from(ledger.earnings,r=>[r.v.id,r.amount]),[['Prodej',7350],['Import z tabulky',4500],['Ztráta',0]]);
+ assert.equal(ledger.earned,10747.5);
+ assert.deepEqual(Array.from(ledger.earnings,r=>[r.v.id,r.amount]),[['Prodej',6247.5],['Import z tabulky',4500],['Ztráta',0]]);
 });
 
 test('monthly split uses one opening balance and the same profit base for both percentages',()=>{
@@ -276,13 +277,13 @@ test('monthly split uses one opening balance and the same profit base for both p
  s.monthlyDeal={startDate:'2026-11-08',owner:1500000,investor:1500000,months:[]};
  const movement=(id,type,amount,date,capitalParty='owner')=>({id,type,amount,date,accountId:'',rate:1,capitalParty,allocations:[]});
  s.transactions.push(movement('personal','withdrawal',45000,'2026-11-27'));
- assert.equal(api.helperLedger(s).earned,7500,'only the earlier sale earns an individual commission');
+ assert.equal(api.helperLedger(s).earned,6375,'only the earlier sale earns an individual commission');
  assert.equal(api.vehicleFinancial(s,carInPool).helper,0);
  assert.equal(api.monthlyProfitEstimate(s,'2026-11').profit,42500);
  const m=api.saveMonthlySplit(s,'2026-11',120000,'2026-12-01');
  assert.deepEqual([m.opening.owner,m.opening.investor,m.investorRate,m.investor,m.helper,m.owner],
   [1500000,1500000,17.5,21000,18000,81000]);
- assert.equal(api.helperLedger(s).earned,25500);
+ assert.equal(api.helperLedger(s).earned,24375);
  assert.equal(api.cashAt(s),1000000,'book entries and allocation do not move bank cash');
  assert.throws(()=>api.saveMonthlySplit(s,'2026-11',120000),/otevřený měsíc/);
  const dec=api.monthlyCapitalBefore(s,'2026-12-01');
@@ -297,7 +298,7 @@ test('monthly split uses one opening balance and the same profit base for both p
  assert.equal(loss.helper,0);
  assert.equal(loss.investor,-1741.41);
  assert.equal(loss.owner,-8258.59);
- assert.equal(api.helperLedger(s).earned,25500);
+ assert.equal(api.helperLedger(s).earned,24375);
  api.assertState(s);
  api.reopenMonthlySplit(s,'2026-12');
  api.reopenMonthlySplit(s,'2026-11');
@@ -337,13 +338,13 @@ test('a car under the original agreement stays outside the monthly split after t
  const oldSale=s.vehicles[0];
  s.monthlyDeal={startDate:'2026-11-15',owner:2500000,investor:1500000,months:[]};
  const result=api.fundingSplit(s,oldSale);
- assert.deepEqual([result.investor,result.helper,result.owner],[8750,7500,33750]);
+ assert.deepEqual([result.investor,result.helper,result.owner],[8750,6375,34875]);
  assert.equal(api.monthlyProfitEstimate(s,'2026-11').sales,1);
  assert.equal(api.monthlyProfitEstimate(s,'2026-11').profit,42500);
- assert.equal(api.helperLedger(s).earned,7500);
+ assert.equal(api.helperLedger(s).earned,6375);
  const november=api.saveMonthlySplit(s,'2026-11',42500,'2026-12-01');
  const december=api.monthlyCapitalBefore(s,'2026-12-01');
- assert.equal(december.owner,2500000+33750+november.owner);
+ assert.equal(december.owner,2500000+34875+november.owner);
  assert.equal(december.investor,1500000+8750+november.investor);
  assert.equal(api.cashAt(s),1000000);
  api.assertState(s);
@@ -389,20 +390,34 @@ test('a bank VAT receipt with unknown destination period changes bank cash once 
  assert.equal(api.monthlySplit({owner:0,investor:2000000},100000).investor,35000);
 });
 
-test('the test app estimates income tax on the profit after costs and the helper',()=>{
+test('the test app estimates income tax after costs and calculates the helper fee from earnings after tax',()=>{
  const v=car('Skaut',{purchase:488000,purchaseVatExact:84694,vat:'eu',sale:25200,
   saleCurrency:'EUR',saleRate:24.18,saleVatExact:0});
  const s=stateWith(v);
  const result=api.vehicleFinancial(s,v);
- assert.equal(result.profit,175125.50);
- assert.equal(result.incomeTaxEstimate,26268.83);
- assert.equal(result.profitAfterIncomeTax,148856.67);
- assert.equal(api.financeDashboard(s,'2026-11-30').afterTax.month,148856.67);
- assert.equal(api.helperLedger(s).earned,30904.50);
+ assert.equal(result.profit,179761.17);
+ assert.equal(result.incomeTaxEstimate,30904.50);
+ assert.equal(result.profitAfterIncomeTax,175125.50);
+ assert.equal(api.financeDashboard(s,'2026-11-30').afterTax.month,175125.50);
+ assert.equal(api.helperLedger(s).earned,26268.83);
 
  s.settings.taxLow=20;
- assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,140100.40);
- assert.equal(api.helperLedger(s).earned,30904.50);
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,164824);
+ assert.equal(api.helperLedger(s).earned,24723.60);
+});
+
+test('a recorded after-tax profit of 120000 gives the helper 18000',()=>{
+ const v=car('Ruční výsledek',{profitMode:'recorded',recordedProfit:142000,recordedProfitAfterIncomeTax:false});
+ const s=stateWith(v);
+ assert.equal(api.helperLedger(s).earnings[0].base,120700);
+ assert.equal(api.helperLedger(s).earned,18105);
+
+ v.recordedProfit=120000;
+ v.recordedProfitAfterIncomeTax=true;
+ assert.equal(api.helperLedger(s).earnings[0].base,120000);
+ assert.equal(api.helperLedger(s).earned,18000);
+ assert.equal(api.vehicleFinancial(s,v).helper,18000);
+ assert.equal(api.vehicleFinancial(s,v).incomeTaxEstimate,null);
 });
 
 test('the after-tax totals preserve recorded amounts, losses, and the date and test filters',()=>{
@@ -429,15 +444,15 @@ test('old payments and new partial payouts count once, with cash movement only o
  s.transactions.push({...payout('old',2000,{accountId:'bank',date:'2026-11-23'}),type:'cost',
   allocations:[{invoiceId:'helper:dříve-párováno',amount:2000}]});
  api.assertState(s);
- assert.equal(api.helperLedger(s).balance,10500);
+ assert.equal(api.helperLedger(s).balance,8250);
  s.transactions.push(payout('record-only',3000),payout('bank-payout',3500,{accountId:'bank'}));
  api.assertState(s);
  assert.equal(api.helperLedger(s).paid,11000);
- assert.equal(api.helperLedger(s).balance,4000);
- assert.equal(api.financeDashboard(s).invoiceDebt,4000);
+ assert.equal(api.helperLedger(s).balance,1750);
+ assert.equal(api.financeDashboard(s).invoiceDebt,1750);
  assert.equal(api.cashAt(s),994500);
  assert.equal(api.cashflow(s,'2026-12').groups.helperPayout,-3500);
- assert.equal(api.vehicleFinancial(s,s.vehicles[0]).profit,42500);
+ assert.equal(api.vehicleFinancial(s,s.vehicles[0]).profit,43625);
 });
 
 test('payouts before opening count against the helper balance without changing the initial bank cash',()=>{
@@ -446,7 +461,7 @@ test('payouts before opening count against the helper balance without changing t
  s.transactions.push(payout('eur-history',100,{accountId:'bank',rate:24.5,date:'2026-10-10'}));
  api.assertState(s);
  assert.equal(api.helperLedger(s).paid,2450);
- assert.equal(api.helperLedger(s).balance,5050);
+ assert.equal(api.helperLedger(s).balance,3925);
  assert.equal(api.cashAt(s),24500000);
 });
 
