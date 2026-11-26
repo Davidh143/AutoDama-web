@@ -52,7 +52,7 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   check(bought.documents.length===1,'Příloha nákupu se neuložila');
   check(bought.vehicles[0].purchaseVatClaim===49560,'Ruční odpočet se neuložil');pass('Nákupní PDF předvyplní cenu a číslo faktury. Zadaný odpočet se uloží společně s autem a přílohou.');
   const id=qa.getState().vehicles[0].id;phase='Slovenská prodejní faktura';qa.vehicleForm(id);await upload('salesInvoiceFiles','sale.pdf');await wait(()=>find('[data-sales-apply]')&&!find('#save').disabled||find('#error').textContent);check(!find('#error').textContent,find('#error').textContent);
-  check(find('[name="salesDoc0_vat"]').value==='eu','Slovenský doklad nebyl rozpoznán jako EU');click('[data-sales-apply]');check(!find('#error').textContent,find('#error').textContent);
+  check(/^SK\d{10}$/.test(find('[name="salesDoc0_vatId"]').value),'Chybí slovenské IČ DPH z faktury');click('[data-sales-apply]');check(!find('#error').textContent,find('#error').textContent);
   check(find('[name="sale"]').value==='25200','Chybná celková prodejní cena');
   check(find('[name="saleVatAmount"]').value==='','Prodejní DPH má zůstat ruční');set('vat','eu');set('saleVatAmount','0');set('saleRate','24.18');
   await save(()=>qa.getState().documents.length===2);
