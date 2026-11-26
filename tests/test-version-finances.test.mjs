@@ -28,7 +28,7 @@ function modelFor(code,manualVat=false){
 const html=readFileSync(new URL('../test/index.html',import.meta.url),'utf8');
 const code=script(html),api=modelFor(code,true);
 const production=readFileSync(new URL('../index.html',import.meta.url),'utf8');
-const productionCode=script(production),live=modelFor(productionCode);
+const productionCode=script(production),live=modelFor(productionCode,true);
 
 function car(id,more={}){
  return {id,name:id,year:null,km:null,plate:'',status:'sold',test:false,review:false,
@@ -473,10 +473,10 @@ test('production stays connected to shared data and compatible bank expenses cou
  s.transactions.push({...payout('bank-payout',2500,{accountId:'bank',note:''}),type:'operating',helperPayout:true});
  s.helperPayouts=[{id:'no-bank',amount:1000,date:'2026-12-12',note:''}];
  live.assertState(s);
- assert.equal(live.helperLedger(s).earned,7500);
+ assert.equal(live.helperLedger(s).earned,6375);
  assert.equal(live.helperLedger(s).paid,3500);
- assert.equal(live.helperLedger(s).balance,4000);
- assert.equal(live.financeDashboard(s).invoiceDebt,4000);
+ assert.equal(live.helperLedger(s).balance,2875);
+ assert.equal(live.financeDashboard(s).invoiceDebt,2875);
  assert.equal(live.cashAt(s),997500);
  assert.equal(live.cashflow(s,'2026-12').groups.operating,-2500);
  s.helperPayouts.push({...s.helperPayouts[0],id:'bank-payout'});
@@ -490,4 +490,49 @@ test('pending production VAT stays out of the monthly estimate until confirmed',
  assert.equal(live.vatResult(s,'2026-11').sales,52500);
  v.purchaseVatConfirmed=true;
  assert.equal(live.vatResult(s,'2026-11').result,10500);
+});
+
+test('production preserves older cars and submits new fields using the existing private save contract',async()=>{
+ const cloudCode=productionCode.slice(productionCode.indexOf('class CloudError '),productionCode.indexOf('let selectedCloudStore='));
+ const Store=vm.runInNewContext(cloudCode+'\nSupabaseStore',{URL,structuredClone,assertState:live.assertState});
+ const shared=stateWith(car('starší')),workspace={id:'60b9019d-e18e-4b46-82cf-a7626852b55b'};
+ const withdrawal={id:'private',type:'withdrawal',date:'2026-11-26',amount:10000,accountId:'bank',rate:1,allocations:[]};
+ let requestBody,privateReads=0;
+ const makeStore=role=>{
+  const store=new Store({url:'https://fixture.supabase.co',publishableKey:'sb_publishable_fixture'},{sessionStorage:null});
+  store.session={user:{id:'fixture-user'}};
+  store.selectWorkspace({...workspace,role});
+  store.request=async(path,{body}={})=>{
+   if(path.startsWith('/rest/v1/autodama_states?'))return [{revision:5,data:shared}];
+   if(path.endsWith('/autodama_current_balances'))return {bank:990000};
+   if(path.startsWith('/rest/v1/autodama_owner_private?')){
+    privateReads++;
+    return [{withdrawals:[withdrawal],planned_withdrawal:30000,private_revision:2}];
+   }
+   assert.equal(path,'/rest/v1/rpc/autodama_save_state_private');
+   requestBody=body;
+   return 6;
+  };
+  return store;
+ };
+ const owner=makeStore('owner'),state=await owner.load();
+ assert.equal(state.transactions[0].id,withdrawal.id);
+ state.vehicles.push(car('nové',{status:'stock',sale:null,sold:'',salePeriod:'',originalSplit:true,purchaseVatClaim:42000}));
+ state.monthlyDeal={startDate:'2026-11-24',owner:2200000,investor:2200000,months:[]};
+ state.transactions.push({id:'refund',type:'vatRefund',vatCashOnly:true,date:'2026-12-18',periodId:'',
+  amount:10000,accountId:'bank',rate:1,allocations:[]});
+ await owner.save(state);
+ assert.equal(requestBody.p_expected_revision,5);
+ assert.equal(requestBody.p_private_revision,2);
+ assert.equal(state.meta.revision,6);
+ assert.deepEqual(requestBody.p_data.vehicles[0],shared.vehicles[0]);
+ assert.equal(requestBody.p_data.vehicles[1].purchaseVatClaim,42000);
+ assert.equal(requestBody.p_data.vehicles[1].originalSplit,true);
+ assert.equal(requestBody.p_data.monthlyDeal.startDate,'2026-11-24');
+ assert.equal(requestBody.p_data.transactions.at(-1).vatCashOnly,true);
+
+ const viewer=makeStore('viewer'),viewerState=await viewer.load();
+ assert.equal(privateReads,1);
+ assert.equal(viewerState.transactions.length,0);
+ await assert.rejects(viewer.save(viewerState),{code:'ACCESS'});
 });

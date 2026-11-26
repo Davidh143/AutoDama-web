@@ -8,8 +8,11 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
  let phase='Start';
  try{
   let html=await(await fetch('../index.html',{cache:'no-store'})).text();
-  html=html.replace('enabled: true,','enabled: false,').replace("const DB='AutoDama-local-v2'","const DB='AutoDama-isolated-qa-"+crypto.randomUUID()+"'");
-  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,recordVatRefund,assertState,capitalView,vehicleVatSummary,readBackup,nav:()=>{$('#overview-content').hidden=true;$('#workspace').hidden=false;$('#page-title').textContent='DPH';$('#breadcrumb').textContent='DPH';renderVAT();},downloads:[],
+  html=html.replace('enabled: true,','enabled: false,')
+   .replace(/https:\/\/[a-z0-9]+\.supabase\.co /,'')
+   .replace("const DB='AutoDama-local-v2'","const DB='AutoDama-isolated-qa-"+crypto.randomUUID()+"'")
+   .replace(/^function localLegacyData\(\).+$/m,'function localLegacyData(){return null;}');
+  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,cashAt,recordBankVat,capitalView,readBackup,nav:()=>{$('#overview-content').hidden=true;$('#workspace').hidden=false;$('#page-title').textContent='DPH';$('#breadcrumb').textContent='DPH';renderVAT();},downloads:[],
    replace:async s=>{s.meta.revision=state.meta.revision;await change(n=>Object.assign(n,s));},
    failNextSave:()=>{const normal=saveStore;saveStore=async()=>{saveStore=normal;throw Error('Testovaný výpadek ukládání');};}};
    download=(name,content)=>window.qa.downloads.push({name,content});`;
@@ -28,28 +31,38 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
    bought:'2026-08-10',stockDate:'2026-08-10',purchase:242000,purchaseCurrency:'CZK',purchaseRate:1,purchaseVatRate:21,purchaseVatExact:42000,purchaseDeduction:100,purchaseVatConfirmed:true,purchasePeriod:'2026-08',purchaseDocumentDate:'2026-08-10',purchaseInvoice:'P-one',purchaseOpening:false,
    vat:'standard',sale:null,sold:'',saleCurrency:'CZK',saleRate:1,saleVatRate:21,saleVatExact:null,salePeriod:'',saleOpening:false,helperPercent:0,profitMode:'calculated',eu:{},funding:{purchaseCash:242000,ownerAmount:121000,investorAmount:121000,investorFraction:.5,investorProfitPercent:35,helperProfitPercent:0}}];
   phase='Jednoduchá obrazovka DPH';await qa.replace(fixture);qa.nav('vat');await tick();
-  check(doc.body.textContent.includes('DPH · kolik čekáš a kolik už přišlo'),'Chybí přehled vratek');
-  const accounting=[...doc.querySelectorAll('details')].find(el=>el.firstElementChild.textContent==='Podrobnosti pro účetní a měsíční přiznání');check(accounting&&!accounting.open,'Účetní podrobnosti musí být sbalené');pass('Přehled DPH se otevře s auty a sbalenými účetními podrobnostmi.');
-  phase='Částečná vratka';qa.recordVatRefund('2026-08');set('refundAmount','12000');
-  check(/6\s*000/.test(find('#simpleRefundPreview').textContent),'Nesprávný náhled rozdělení vratky');await save(()=>qa.getState().transactions.length===1);
-  check(qa.capitalView(qa.getState()).vatReceivedInv===6000,'Nesprávné uvolnění kapitálu investora');check(qa.getState().vatPeriods[0].filed==='','Evidence nesmí vymýšlet podané přiznání');pass('Zápis 12 000 Kč uvolní investorovi přesně 6 000 Kč a nezadává fiktivní přiznání.');
+  check(doc.body.textContent.includes('Přijaté vratky a zaplacené odvody'),'Chybí přehled vratek');
+  const accounting=[...doc.querySelectorAll('details')].find(el=>el.firstElementChild.textContent==='Kontrola DPH a podrobnosti');check(accounting&&!accounting.open,'Účetní podrobnosti musí být sbalené');pass('Přehled DPH se otevře se sbalenými podrobnostmi.');
+  phase='Bankovní vratka';qa.recordBankVat('2026-09');set('bankVatDate','2026-09-25');set('bankVatAmount','12000');
+  await save(()=>qa.getState().transactions.length===1);
+  const withRefund=qa.getState();
+  check(qa.cashAt(withRefund)===1012000,'Nesprávný zůstatek po vratce');
+  check(qa.capitalView(withRefund).vatReceivedInv===0,'Vratka změnila kapitál investora');check(withRefund.vatPeriods.length===0,'Zápis vytvořil přiznání');
+  pass('Přijatá vratka 12 000 Kč se připíše na účet. Kapitál investora zůstane stejný.');
   phase='Potvrzení mazání';qa.vehicleForm('one');click('#delete');await wait(()=>!find('#delete').disabled);click('#save');await tick();check(find('#error').textContent.includes('Nejprve potvrď'),'Chybí potvrzení smazání');click('#cancel');check(qa.getState().vehicles.length===1,'Zrušení změnilo data');
   qa.deleteVehicleForm('one');find('[name="confirmVehicleDelete"]').checked=true;qa.failNextSave();click('#save');await wait(()=>find('#error').textContent.includes('výpadek'));check(qa.getState().vehicles.length===1,'Selhání uložení změnilo stav');click('#cancel');pass('Zrušení mazání i simulovaný výpadek zachovají původní auto a všechny údaje.');
   await qa.replace(fixture);const blank=qa.getState();blank.vehicles=[];await qa.replace(blank);
   phase='Nákupní PDF';qa.vehicleForm();
   const upload=async(name,pdfName)=>{const bytes=Uint8Array.from(atob(PDFS[pdfName]),c=>c.charCodeAt(0));const transfer=new DataTransfer();transfer.items.add(new File([bytes],pdfName,{type:'application/pdf'}));const input=find('[name="'+name+'"]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));};
-  await upload('invoiceFile','purchase.pdf');await wait(()=>find('[name="purchaseVatExact"]').value==='49560'||find('#error').textContent);check(!find('#error').textContent,find('#error').textContent);
-  check(find('[name="purchase"]').value==='285560','Chybná nákupní cena');check(find('[name="purchaseInvoice"]').value==='7654321','Chybné číslo faktury');await save(()=>qa.getState().vehicles.length===1);
-  check(qa.getState().documents.length===1,'Příloha nákupu se neuložila');pass('Skutečné nákupní PDF se načte po výběru a uloží se s DPH 49 560 Kč, VIN i přílohou.');
-  const id=qa.getState().vehicles[0].id;phase='Slovenská prodejní faktura';qa.vehicleForm(id);await upload('salesInvoiceFiles','sale.pdf');await wait(()=>find('[data-sales-apply]')||find('#error').textContent);check(!find('#error').textContent,find('#error').textContent);
+  await upload('invoiceFile','purchase.pdf');await wait(()=>find('[name="purchase"]').value==='285560'&&!find('#save').disabled||find('#error').textContent);check(!find('#error').textContent,find('#error').textContent);
+  check(find('[name="purchaseInvoice"]').value==='7654321','Chybné číslo faktury');
+  check(find('[name="purchaseVatClaim"]').value==='','Nákupní odpočet má zůstat ruční');set('purchaseVatClaim','49560');
+  await save(()=>qa.getState().vehicles.length===1);
+  const bought=qa.getState();
+  check(bought.documents.length===1,'Příloha nákupu se neuložila');
+  check(bought.vehicles[0].purchaseVatClaim===49560,'Ruční odpočet se neuložil');pass('Nákupní PDF předvyplní cenu a číslo faktury. Zadaný odpočet se uloží společně s autem a přílohou.');
+  const id=qa.getState().vehicles[0].id;phase='Slovenská prodejní faktura';qa.vehicleForm(id);await upload('salesInvoiceFiles','sale.pdf');await wait(()=>find('[data-sales-apply]')&&!find('#save').disabled||find('#error').textContent);check(!find('#error').textContent,find('#error').textContent);
   check(find('[name="salesDoc0_vat"]').value==='eu','Slovenský doklad nebyl rozpoznán jako EU');click('[data-sales-apply]');check(!find('#error').textContent,find('#error').textContent);
-  check(find('[name="sale"]').value==='25200','Chybná celková prodejní cena');check(find('[name="saleVatExact"]').value==='0','Nenulová DPH slovenské faktury');
-  // The tested confirmation concerns missing shipping evidence in synthetic data.
-  frame.contentWindow.confirm=()=>true;await save(()=>qa.getState().documents.length===2);check(qa.getState().transactions.length===0,'Faktura vytvořila fiktivní příjem');pass('Slovenská prodejní faktura zachová 0 % DPH, celkovou cenu a přílohu; nevytvoří platbu.');
-  phase='PDF bez textu';qa.vehicleForm(id);await upload('salesInvoiceFiles','scan.pdf');await wait(()=>find('[data-sales-attach]'));click('[data-sales-attach]');await save(()=>qa.getState().documents.length===3);check(qa.getState().vehicles[0].sale===25200,'Příloha změnila cenu prodeje');pass('PDF bez čitelného textu jde uložit jako přílohu a ponechá hodnoty prodeje.');
+  check(find('[name="sale"]').value==='25200','Chybná celková prodejní cena');
+  check(find('[name="saleVatAmount"]').value==='','Prodejní DPH má zůstat ruční');set('vat','eu');set('saleVatAmount','0');set('saleRate','24.18');
+  await save(()=>qa.getState().documents.length===2);
+  const sold=qa.getState();
+  check(sold.vehicles[0].saleVatAmount===0,'Ručně zadaná nula se neuložila');
+  check(sold.transactions.length===0,'Faktura vytvořila fiktivní příjem');pass('Slovenskou fakturu lze uložit s ručně zadaným DPH 0 Kč a bez současného zápisu úhrady.');
+  phase='PDF bez textu';qa.vehicleForm(id);await upload('salesInvoiceFiles','scan.pdf');await wait(()=>find('#salesInvoiceStatus').textContent.includes('PDF je připravené k uložení')&&!find('#save').disabled);await save(()=>qa.getState().documents.length===3);check(qa.getState().vehicles[0].sale===25200,'Příloha změnila cenu prodeje');pass('PDF bez čitelného textu jde uložit jako přílohu a ponechá hodnoty prodeje.');
   phase='Záloha a kompletní smazání';qa.deleteVehicleForm(id);find('[name="confirmVehicleDelete"]').checked=true;await save(()=>qa.getState().vehicles.length===0);
   const backup=JSON.parse(qa.downloads.at(-1).content);await qa.readBackup(backup);check(backup.data.documents.length===3,'V záloze chybí přílohy');check(qa.getState().documents.length===0,'V aktivní evidenci zůstaly přílohy');pass('Kompletní smazání vytvoří ověřenou zálohu všech tří PDF a odstraní auto i přílohy.');
-  phase='Náhled po testu';await qa.replace(fixture);qa.recordVatRefund('2026-08');set('refundAmount','12000');await save(()=>qa.getState().transactions.length===1);qa.nav('vat');
+  phase='Náhled po testu';await qa.replace(withRefund);qa.nav('vat');set('simpleVatPeriod','2026-09');find('[name="simpleVatPeriod"]').dispatchEvent(new Event('change',{bubbles:true}));
   status.textContent='Hotovo: všech 7 scénářů prošlo. Níže je fiktivní přehled DPH.';status.className='ok';document.title='AutoDama QA · 7/7 OK';
  }catch(error){status.textContent='Test selhal ('+phase+'): '+error.message;status.className='fail';document.title='AutoDama QA · CHYBA';console.error(phase,error);}
 })();

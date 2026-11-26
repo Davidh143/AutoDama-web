@@ -37,7 +37,7 @@ const final=[
  'CELKEM 25 200,00 0,00 25 200,00',
  'OSVOBOZENO OD DPH','VIN: '+vin,'Zpracováno systémem Money S3'
 ];
-test('Money S3 zero-VAT EU invoice imports as exempt EU delivery, not domestic VAT',()=>{
+test('Money S3 EU invoice is recognized and imports the sale details without entering VAT',()=>{
  const x=parseSalesInvoice(final);
  assert.equal(x.kind,'final');assert.equal(x.number,'120015');
  assert.equal(x.vin,vin);assert.equal(x.vatId,'SK1234567890');
@@ -47,9 +47,9 @@ test('Money S3 zero-VAT EU invoice imports as exempt EU delivery, not domestic V
  assert.equal(x.vatExact,0);
  assert.ok(!x.warnings.includes('Doklad současně obsahuje vyčíslenou DPH a text osvobození. Ověř režim ručně.'));
  const patch=salesInvoicePatch({vin,bought:'2026-08-01',status:'stock',sale:null,eu:{},vat:'standard'},x);
- assert.equal(patch.vat,'eu');assert.equal(patch.status,'sold');
+ assert.equal(patch.vat,undefined);assert.equal(patch.status,'sold');
  assert.equal(patch.sale,25200);assert.equal(patch.saleCurrency,'EUR');
- assert.equal(patch.saleInvoice,'120015');assert.equal(patch.saleVatExact,0);
+ assert.equal(patch.saleInvoice,'120015');assert.equal(patch.saleVatAmount,undefined);
  assert.equal(patch.viesValid,false);
  assert.equal(patch.conditionsConfirmed,false);
 });

@@ -12,9 +12,8 @@ const api=vm.runInNewContext(
  grab('function allocateResult(','/* Ledger movements are explicit')+
  grab('function vatSplitAmount(','function fundingFormFields(')+
  grab('function vehicleDeletionPlan(','function deleteVehicleForm(')+
- grab('function prepareSimpleVatReceipt(','function recordVatRefund(')+
  grab('function stagePurchaseInvoiceDocuments(','function salesInvoiceFormFields(')+
- ';({emptyState,assertState,vehicleDeletionPlan,prepareSimpleVatReceipt,vehicleVatSummary,capitalView,cashAt,vehicleFinancial,stagePurchaseInvoiceDocuments})',
+ ';({emptyState,assertState,vehicleDeletionPlan,validateVatRefundReceipt,vatResult,vehicleVatSummary,capitalView,cashAt,vehicleFinancial,stagePurchaseInvoiceDocuments})',
  {crypto:{...webcrypto,randomUUID},structuredClone,getCloudStore:()=>null,cloudMode:()=>false,money:n=>String(n),
  roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}});
 export function car(id='one',fraction=.5){return {id,name:'Test Octavia '+id,year:2021,km:50000,plate:'TEST',vin:'',status:'stock',test:false,review:false,
@@ -27,9 +26,20 @@ const cost=(id,vehicleId)=>({id,vehicleId,name:'Servis '+id,category:'Servis',da
 const tx=(id,type,amount,more={})=>({id,type,accountId:'bank',amount,date:'2026-08-20',rate:1,allocations:[],taxVat:0,taxRelevant:false,test:false,...more});
 const doc=(id,vehicleId,targetType,targetId)=>({id,name:id+'.pdf',vehicleId,targetType,targetId,mime:'application/pdf',data:'JVBERi0xLjQK',category:'Další dokument'});
 const wheel=(id,source,assigned)=>({id,code:id,kind:'tires',season:'winter',rim:'none',qty:4,brand:'Test',size:'205/55 R16',location:'Sklad',note:'',tread:5,estimatedValue:null,received:true,status:assigned?'assigned':'available',sourceVehicleId:source,assignedVehicleId:assigned,movements:[]});
-const receive=(s,amount,more={})=>api.prepareSimpleVatReceipt(s,{id:randomUUID(),periodId:'2026-08',accountId:'bank',date:'2026-09-25',amount,rate:1,...more});
+function receive(s,amount,more={}){
+ const next=structuredClone(s);
+ const transaction=tx(randomUUID(),'vatRefund',amount,{periodId:'2026-08',date:'2026-09-25',...more});
+ if(!next.vatPeriods.some(p=>p.id===transaction.periodId)){
+  next.vatPeriods.push({id:transaction.periodId,status:'Předběžné',actual:api.vatResult(next,transaction.periodId).result,
+   trackingOnly:true,filed:'',due:''});
+ }
+ api.validateVatRefundReceipt(next,transaction);
+ next.transactions.push(transaction);
+ api.assertState(next);
+ return {next};
+}
 
-test('a simple receipt requires no invented filing and releases only received capital',()=>{
+test('an older automatically allocated receipt releases its original capital share without a filed date',()=>{
  const s=fixture(),original=structuredClone(s),before=api.capitalView(s),first=receive(s,12000).next;
  assert.deepEqual(s,original);api.assertState(first);assert.equal(first.vatPeriods[0].trackingOnly,true);assert.equal(first.vatPeriods[0].filed,'');assert.equal(first.vatPeriods[0].status,'Předběžné');
  const x=api.vehicleVatSummary(first,first.vehicles[0]);assert.equal(x.refundReceived,12000);assert.equal(x.remainingRefund,30000);
@@ -43,14 +53,22 @@ test('EU sale keeps the purchase VAT and its profit stays unchanged after receip
  assert.equal(api.vehicleVatSummary(next,next.vehicles[0]).refundReceived,42000);assert.equal(api.vehicleFinancial(next,next.vehicles[0]).profit,before.profit);
  assert.equal(api.capitalView(next).tiedInv,0);
 });
-test('same-month domestic sale and unknown regimes cannot create a cash refund',()=>{
+test('a bank-only VAT receipt does not allocate a refund to a car with incomplete VAT',()=>{
  const s=fixture();Object.assign(s.vehicles[0],{status:'sold',sold:'2026-08-20',sale:302500,salePeriod:'2026-08'});
- assert.throws(()=>receive(s,42000),/není vypočtená vratka/);
- s.vehicles[0].vat='pending';assert.throws(()=>receive(s,42000),/není vypočtená vratka/);
+ assert.equal(api.vehicleVatSummary(s,s.vehicles[0]).expectedRefund,0);
+ s.vehicles[0].vat='pending';
+ s.transactions.push(tx('statement','vatRefund',12000,{date:'2026-09-25',periodId:'',vatCashOnly:true}));
+ api.assertState(s);
+ assert.equal(api.cashAt(s),1012000);
+ assert.equal(api.vehicleVatSummary(s,s.vehicles[0]).refundReceived,0);
+ assert.equal(api.vehicleVatSummary(s,s.vehicles[0]).expectedRefund,null);
 });
-test('an existing filed discrepancy stays blocked and unchanged',()=>{
+test('a filed discrepancy preserves the receipt and blocks automatic capital release',()=>{
  const s=fixture();s.vatPeriods=[{id:'2026-08',status:'Čeká na vrácení',actual:-50000,filed:'2026-09-20',due:'2026-09-25'}];
- const original=structuredClone(s);assert.throws(()=>receive(s,1000),/liší/);assert.deepEqual(s,original);
+ const original=structuredClone(s),{next}=receive(s,1000);
+ assert.deepEqual(s,original);
+ assert.equal(api.vehicleVatSummary(next,next.vehicles[0]).refundReceived,0);
+ assert.equal(api.cashAt(next)-api.cashAt(s),1000);
 });
 test('simple receipts use the real exchange rate and reject invalid dates and accounts',()=>{
  const s=fixture();s.accounts[0].currency='EUR';s.accounts[0].opening=0;
