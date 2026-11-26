@@ -17,9 +17,10 @@ function modelFor(code,manualVat=false){
   grab('function allocateResult(','/* Ledger movements are explicit')+grab('function fundingSplit(','function fundingFormFields(')+
   (manualVat?grab('function vatSplitAmount(','function fundingSplit(')+
    grab('const SALES_INVOICE_KINDS=','const salesNorm=')+grab('function salesInvoicePatch(','function stagePurchaseInvoiceDocuments(')+
-   grab('function salesInvoiceMetadata(','function simplifyVehicleForm('):'')+
+   grab('function salesInvoiceMetadata(','function simplifyVehicleForm(')+
+   grab('function vehicleProfitNote(','function renderOverview('):'')+
   ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow'+
-  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,vatBankMonth':'')+'})',
+  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,vatBankMonth,vehicleProfitNote':'')+'})',
   {getCloudStore:()=>null,cloudMode:()=>false,crypto:{randomUUID:()=> 'fixture-document'},roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
    finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
  );
@@ -130,6 +131,26 @@ test('empty VAT stays open for review and zero is a recorded amount',()=>{
  assert.equal(api.vehicleFinancial(s,v).costNet,1110);
  assert.equal(api.vehicleFinancial(s,v).saleVat,0);
  assert.equal(api.vehicleVatCheck(v).sale.expected,null);
+});
+
+test('a missing profit explains what to complete and a recorded after-tax profit is displayed',()=>{
+ const v=car('Prodej bez české DPH',{vat:'eu',saleVatAmount:null});
+ const s=stateWith(v);
+ const profitNote=()=>api.vehicleProfitNote(s,v,api.vehicleFinancial(s,v));
+ assert.equal(profitNote(),'Chybí DPH z prodeje');
+
+ v.saleVatAmount=0;
+ assert.ok(Number.isFinite(api.vehicleFinancial(s,v).profitAfterIncomeTax));
+ v.review=true;
+ assert.equal(profitNote(),'Historický záznam čeká na doplnění');
+
+ v.review=false;
+ s.costs.push({vehicleId:v.id,review:true,amount:500,currency:'CZK',rate:1,vatRate:0,deduction:0});
+ assert.equal(profitNote(),'Náklady auta čekají na ověření');
+
+ Object.assign(v,{profitMode:'recorded',recordedProfit:120366,recordedProfitAfterIncomeTax:true,saleVatAmount:null});
+ assert.equal(api.vehicleFinancial(s,v).profitAfterIncomeTax,120366);
+ assert.equal(profitNote(),'Zadaný po dani');
 });
 
 test('a refund can be recorded without a bank account, filing, or a full vehicle assignment',()=>{
