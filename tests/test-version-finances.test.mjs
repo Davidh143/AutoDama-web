@@ -20,7 +20,7 @@ function modelFor(code,manualVat=false){
    grab('function salesInvoiceMetadata(','function simplifyVehicleForm(')+
    grab('function vehicleProfitNote(','function renderOverview('):'')+
   ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow'+
-  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,vatBankMonth,vehicleProfitNote':'')+'})',
+  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,vatBankMonth,vehicleProfitNote,checkOriginalSplitChange':'')+'})',
   {getCloudStore:()=>null,cloudMode:()=>false,crypto:{randomUUID:()=> 'fixture-document'},roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
    finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
  );
@@ -326,6 +326,31 @@ test('sales from the cutover use the monthly capital ratio even when bought with
  assert.equal(dec.investor,14555.52);
  assert.equal(api.fundingSplit(s,earlier).investor,17500);
  api.assertState(s);
+});
+
+test('a car under the original agreement stays outside the monthly split after the cutover',()=>{
+ const s=stateWith(
+  car('Původní dohoda',{originalSplit:true,funding:{purchaseCash:242000,ownerAmount:121000,
+   investorAmount:121000,investorFraction:.5,investorProfitPercent:35,helperProfitPercent:15}}),
+  car('Měsíční dohoda')
+ );
+ const oldSale=s.vehicles[0];
+ s.monthlyDeal={startDate:'2026-11-15',owner:2500000,investor:1500000,months:[]};
+ const result=api.fundingSplit(s,oldSale);
+ assert.deepEqual([result.investor,result.helper,result.owner],[8750,7500,33750]);
+ assert.equal(api.monthlyProfitEstimate(s,'2026-11').sales,1);
+ assert.equal(api.monthlyProfitEstimate(s,'2026-11').profit,42500);
+ assert.equal(api.helperLedger(s).earned,7500);
+ const november=api.saveMonthlySplit(s,'2026-11',42500,'2026-12-01');
+ const december=api.monthlyCapitalBefore(s,'2026-12-01');
+ assert.equal(december.owner,2500000+33750+november.owner);
+ assert.equal(december.investor,1500000+8750+november.investor);
+ assert.equal(api.cashAt(s),1000000);
+ api.assertState(s);
+
+ assert.throws(()=>api.checkOriginalSplitChange(s,oldSale,{...oldSale,originalSplit:false}),/znovu otevři uzávěrku za 2026-11/);
+ api.reopenMonthlySplit(s,'2026-11');
+ api.checkOriginalSplitChange(s,oldSale,{...oldSale,originalSplit:false});
 });
 
 test('a saved fixed-rate month stays intact while the next month uses the capital ratio',()=>{
