@@ -19,7 +19,7 @@ function modelFor(code,manualVat=false){
    grab('const SALES_INVOICE_KINDS=','const salesNorm=')+grab('function salesInvoicePatch(','function stagePurchaseInvoiceDocuments(')+
    grab('function salesInvoiceMetadata(','function simplifyVehicleForm('):'')+
   ';({emptyState,assertState,helperLedger,vehicleFinancial,fundingSplit,vatResult,financeDashboard,cashAt,cashflow'+
-  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,vatBankMonth':'')+'})',
+  (manualVat?',vehicleVatCheck,monthlyVatCheck,vehicleVatLedger,periodSettlement,setPurchaseVatClaim,capitalView,salesInvoicePatch,stageSalesInvoiceDocuments,monthlyCapitalBefore,monthlyProfitEstimate,monthlySplit,saveMonthlySplit,reopenMonthlySplit,nextMonthlyPeriod,setFixedInvestorRate,vatBankMonth':'')+'})',
   {getCloudStore:()=>null,cloudMode:()=>false,crypto:{randomUUID:()=> 'fixture-document'},roundMoney:n=>Math.round((n+Number.EPSILON)*100)/100,
    finite:n=>{if(!Number.isFinite(n))throw Error('Invalid');}}
  );
@@ -281,6 +281,46 @@ test('monthly split uses one opening balance and the same profit base for both p
  api.reopenMonthlySplit(s,'2026-12');
  api.reopenMonthlySplit(s,'2026-11');
  assert.equal(api.nextMonthlyPeriod(s.monthlyDeal),'2026-11');
+ api.assertState(s);
+});
+
+test('fixed 17.5% covers sales on and after the cutover regardless of capital changes',()=>{
+ const earlier=car('Původní prodej',{sold:'2026-11-19',funding:{purchaseCash:242000,ownerAmount:0,
+  investorAmount:242000,investorFraction:1,investorProfitPercent:35,helperProfitPercent:15}});
+ const later=car('Prodej od začátku dohody');
+ const s=stateWith(earlier,later);
+ s.monthlyDeal={startDate:'2026-11-20',fixedRateFrom:'2026-11-20',owner:3000000,investor:2200000,months:[]};
+ assert.equal(api.fundingSplit(s,earlier).investor,17500);
+ assert.equal(api.vehicleFinancial(s,later).helper,0);
+ assert.equal(api.monthlyProfitEstimate(s,'2026-11').sales,1);
+ assert.equal(api.monthlyProfitEstimate(s,'2026-11').profit,42500);
+
+ const nov=api.saveMonthlySplit(s,'2026-11',200000,'2026-12-01');
+ assert.deepEqual([nov.investorRate,nov.investor,nov.helper,nov.owner],[17.5,35000,30000,135000]);
+ s.transactions.push({id:'capital-out',date:'2026-12-02',type:'withdrawal',amount:500000,accountId:'',
+  rate:1,capitalParty:'owner',allocations:[]});
+ const dec=api.saveMonthlySplit(s,'2026-12',100000,'2026-12-20');
+ assert.equal(dec.investor,17500);
+ assert.equal(api.monthlyCapitalBefore(s,'2027-01-01').owner,2702500);
+ assert.equal(api.fundingSplit(s,earlier).investor,17500);
+ api.assertState(s);
+});
+
+test('switching a capital-based agreement to 17.5% leaves closed months at their agreed rates',()=>{
+ const s=stateWith();
+ const deal={startDate:'2026-10-15',owner:3000000,investor:1000000,months:[]};
+ s.monthlyDeal=deal;
+ const october=api.saveMonthlySplit(s,'2026-10',100000,'2026-11-01');
+ api.saveMonthlySplit(s,'2026-11',200000,'2026-12-01');
+ api.reopenMonthlySplit(s,'2026-11');
+ api.setFixedInvestorRate(deal,'2026-11');
+ assert.equal(deal.fixedRateFrom,'2026-11-01');
+ assert.equal(october.investor,8750);
+ assert.equal(deal.months.find(m=>m.period==='2026-11').investor,35000);
+ api.assertState(s);
+ const november=api.saveMonthlySplit(s,'2026-11',200000,'2026-12-01');
+ assert.equal(november.investor,35000);
+ assert.equal(deal.months.find(m=>m.period==='2026-10').investor,8750);
  api.assertState(s);
 });
 
