@@ -44,6 +44,20 @@ function stateWith(...vehicles){
  s.accounts=[{id:'bank',name:'Účet',currency:'CZK',opening:1000000,openingDate:'2026-11-01'}];
  return s;
 }
+test('sale before purchase evidence counts in its own month and has no measured stock days',()=>{
+ const beforePurchase=car('Earlier sale',{
+  sold:'2026-10-30',salePeriod:'2026-10',profitMode:'recorded',
+  recordedProfit:40000,recordedProfitAfterIncomeTax:true
+ });
+ const normal=car('Later sale');
+ const state=stateWith(beforePurchase,normal);
+ for(const model of [live,api]){
+  assert.doesNotThrow(()=>model.assertState(state));
+  assert.equal(model.vehicleFinancial(state,beforePurchase).days,null);
+  assert.equal(model.financeDashboard(state,'2026-11-30').afterTax.previous,40000);
+  assert.equal(model.financeDashboard(state,'2026-11-30').averageDays,10);
+ }
+});
 const payout=(id,amount,more={})=>({id,amount,type:'helperPayout',accountId:'',date:'2026-12-10',rate:1,allocations:[],...more});
 
 test('test build can execute its inline module and uses isolated storage',()=>{

@@ -64,6 +64,13 @@ test('an issued advance invoice never records a completed sale or received cash'
  const patch=salesInvoicePatch({vin,bought:'2026-08-01',status:'stock',sale:null,eu:{}},x);
  assert.equal(patch.sale,undefined);assert.equal(patch.status,undefined);
 });
+test('a final invoice keeps the sale month when the recorded purchase is later',()=>{
+ const invoice=parseSalesInvoice(final);
+ const patch=salesInvoicePatch({vin,bought:'2026-10-01',status:'stock',eu:{}},invoice);
+ assert.equal(patch.sold,'2026-09-18');
+ assert.equal(patch.salePeriod,'2026-09');
+ assert.equal(patch.bought,undefined);
+});
 test('zero VAT without Slovak buyer and exemption is not assumed EU',()=>{
  const rows=final.map(s=>s.replace('SK1234567890','CZ12345678').replace('OSVOBOZENO OD DPH','JINÁ POZNÁMKA'));
  const x=parseSalesInvoice(rows);
