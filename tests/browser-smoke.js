@@ -25,7 +25,10 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   frame.srcdoc=html;await wait(()=>frame.contentWindow.qa?.ready);
   const qa=frame.contentWindow.qa,doc=frame.contentDocument,find=selector=>doc.querySelector(selector),tick=()=>new Promise(r=>setTimeout(r,60));
   const set=(name,value)=>{const el=find('[name="'+name+'"]');el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
-  const visible=name=>!!find('[name="'+name+'"]')?.getClientRects().length;
+  const visible=name=>{
+   const control=find('[name="'+name+'"]');
+   return !!control?.getClientRects().length&&!control.closest('[hidden], details:not([open])');
+  };
   const click=selector=>{const el=find(selector);check(el,'Chybí ovládací prvek '+selector);el.click();};
   const save=async predicate=>{click('#save');await wait(()=>predicate()||find('#error').textContent);if(find('#error').textContent)throw Error(find('#error').textContent);};
   const fixture=qa.emptyState();fixture.settings.reserve=0;fixture.settings.plannedWithdrawal=0;fixture.capital={owner:1000000,investor:1000000,asOf:'2026-08-01'};
@@ -46,7 +49,12 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
    check(quickCar.purchaseVatClaim===null,'Rychlý zápis vytvořil odpočet');pass('Z přehledu lze uložit auto se základními údaji a datem nákupu.');
 
    phase='Prodej z přehledu';
+   const withStock=qa.getState();
+   withStock.vehicles.push({...quickCar,id:'qa-other-stock',name:'Další auto',plate:'QA002'});
+   await qa.replace(withStock);
    click('[data-action="chooseSaleVehicle"]');
+   set('carToSell',quickCar.id);
+   await save(()=>find('#dialog-title').textContent.includes('Fiktivní Octavia'));
    check(['sale','sold','recordedProfit'].every(visible),'Ve formuláři prodeje chybí základní pole');
    check(['saleVatAmount','salesInvoiceFiles','originalSplit','finEnabled'].every(name=>!visible(name)),'Při prodeji jsou rozbalené podrobnosti');
    set('sale','360000');set('sold','2026-08-21');set('recordedProfit','120000');
