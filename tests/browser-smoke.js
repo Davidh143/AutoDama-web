@@ -7,12 +7,14 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
  const check=(condition,message)=>{if(!condition)throw Error(message);};
  let phase='Start';
  try{
-  let html=await(await fetch('../index.html',{cache:'no-store'})).text();
+  const testBuild=new URLSearchParams(location.search).get('build')==='test';
+  let html=await(await fetch(testBuild?'../test/index.html':'../index.html',{cache:'no-store'})).text();
+  const quickBuild=html.includes('id="daily-actions"');
   html=html.replace('enabled: true,','enabled: false,')
    .replace(/https:\/\/[a-z0-9]+\.supabase\.co /,'')
-   .replace("const DB='AutoDama-local-v2'","const DB='AutoDama-isolated-qa-"+crypto.randomUUID()+"'")
+   .replace(/const DB='AutoDama-[^']+'/,"const DB='AutoDama-isolated-qa-"+crypto.randomUUID()+"'")
    .replace(/^function localLegacyData\(\).+$/m,'function localLegacyData(){return null;}');
-  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,renderVAT,deleteVehicleForm,cashAt,recordBankVat,capitalView,readBackup,nav:()=>{$('#overview-content').hidden=true;$('#workspace').hidden=false;$('#page-title').textContent='DPH';$('#breadcrumb').textContent='DPH';renderVAT();},downloads:[],
+  const hook=`window.qa={getState:()=>structuredClone(state),emptyState,vehicleForm,vehicleDetail,vehicleFinancial,renderVAT,deleteVehicleForm,cashAt,capitalView,readBackup,nav:()=>{$('#overview-content').hidden=true;$('#workspace').hidden=false;$('#page-title').textContent='DPH';renderVAT();},downloads:[],
    replace:async s=>{s.meta.revision=state.meta.revision;await change(n=>Object.assign(n,s));},
    failNextSave:()=>{const normal=saveStore;saveStore=async()=>{saveStore=normal;throw Error('Testovaný výpadek ukládání');};}};
    download=(name,content)=>window.qa.downloads.push({name,content});`;
@@ -22,7 +24,8 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   html=html.replace(/script-src 'sha256-[^']+'/,"script-src 'sha256-"+hash+"'");
   frame.srcdoc=html;await wait(()=>frame.contentWindow.qa?.ready);
   const qa=frame.contentWindow.qa,doc=frame.contentDocument,find=selector=>doc.querySelector(selector),tick=()=>new Promise(r=>setTimeout(r,60));
-  const set=(name,value)=>{const el=find('[name="'+name+'"]');el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));};
+  const set=(name,value)=>{const el=find('[name="'+name+'"]');el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
+  const visible=name=>!!find('[name="'+name+'"]')?.getClientRects().length;
   const click=selector=>{const el=find(selector);check(el,'Chybí ovládací prvek '+selector);el.click();};
   const save=async predicate=>{click('#save');await wait(()=>predicate()||find('#error').textContent);if(find('#error').textContent)throw Error(find('#error').textContent);};
   const fixture=qa.emptyState();fixture.settings.reserve=0;fixture.settings.plannedWithdrawal=0;fixture.capital={owner:1000000,investor:1000000,asOf:'2026-08-01'};
@@ -30,10 +33,54 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   fixture.vehicles=[{id:'one',name:'Testovací Octavia',year:2021,km:50000,plate:'TEST',vin:'TMBJG7NX7NY000001',status:'stock',test:false,review:false,
    bought:'2026-08-10',stockDate:'2026-08-10',purchase:242000,purchaseCurrency:'CZK',purchaseRate:1,purchaseVatRate:21,purchaseVatExact:42000,purchaseDeduction:100,purchaseVatConfirmed:true,purchasePeriod:'2026-08',purchaseDocumentDate:'2026-08-10',purchaseInvoice:'P-one',purchaseOpening:false,
    vat:'standard',sale:null,sold:'',saleCurrency:'CZK',saleRate:1,saleVatRate:21,saleVatExact:null,salePeriod:'',saleOpening:false,helperPercent:0,profitMode:'calculated',eu:{},funding:{purchaseCash:242000,ownerAmount:121000,investorAmount:121000,investorFraction:.5,investorProfitPercent:35,helperProfitPercent:0}}];
-  phase='Jednoduchá obrazovka DPH';await qa.replace(fixture);qa.nav('vat');await tick();
+  if(quickBuild){
+   phase='Přidání auta z přehledu';
+   const simple=qa.emptyState();simple.accounts=fixture.accounts;await qa.replace(simple);
+   click('[data-action="newVehicle"]');
+   check(['name','plate','purchase','bought'].every(visible),'Základní údaje při nákupu nejsou vidět');
+   check(['invoiceFile','purchaseVatClaim','originalSplit','stockDate'].every(name=>!visible(name)),'Při nákupu jsou rozbalené podrobnosti');
+   set('name','Fiktivní Octavia');set('plate','QA001');set('purchase','220000');set('bought','2026-08-10');
+   await save(()=>qa.getState().vehicles.length===1);
+   const quickCar=qa.getState().vehicles[0];
+   check(quickCar.stockDate===quickCar.bought&&quickCar.purchasePeriod==='2026-08','Datum skladu a období se neřídí datem nákupu');
+   check(quickCar.purchaseVatClaim===null,'Rychlý zápis vytvořil odpočet');pass('Z přehledu lze uložit auto se základními údaji a datem nákupu.');
+
+   phase='Prodej z přehledu';
+   click('[data-action="chooseSaleVehicle"]');
+   check(['sale','sold','recordedProfit'].every(visible),'Ve formuláři prodeje chybí základní pole');
+   check(['saleVatAmount','salesInvoiceFiles','originalSplit','finEnabled'].every(name=>!visible(name)),'Při prodeji jsou rozbalené podrobnosti');
+   set('sale','360000');set('sold','2026-08-21');set('recordedProfit','120000');
+   await save(()=>qa.getState().vehicles[0].status==='sold');
+   const afterSale=qa.getState(),earnings=qa.vehicleFinancial(afterSale,afterSale.vehicles[0]);
+   check(earnings.profitAfterIncomeTax===120000&&earnings.helper===18000,'Výdělek nebo odměna se při prodeji přepočítala chybně');
+   check(afterSale.transactions.length===0,'Zápis prodeje vytvořil pohyb na účtu');pass('Prodej přijme ručně zadaný čistý výdělek 120 000 Kč a vypočítá odměnu 18 000 Kč.');
+
+   phase='Náklad z detailu auta';qa.vehicleDetail(quickCar.id);click('[data-action="costFor"]');
+   check(visible('costName')&&visible('amount')&&!visible('vatClaim'),'Zápis nákladu má zobrazit jen základní pole');
+   set('costName','Doprava');set('amount','1250');set('date','2026-08-12');
+   await save(()=>qa.getState().costs.length===1);
+   check(qa.getState().costs[0].vehicleId===quickCar.id&&qa.getState().costs[0].amount===1250,'Náklad se neuložil ke správnému autu');
+   pass('Náklad lze zapsat přímo z detailu auta.');
+
+   phase='Doplnění staršího prodeje';
+   const history=structuredClone(fixture),oldCar=history.vehicles[0];
+   Object.assign(oldCar,{sale:362000,status:'sold',review:true,originalSplit:true,
+    profitMode:'recorded',recordedProfit:120366,recordedProfitAfterIncomeTax:true});
+   oldCar.funding={effectiveDate:null,helperProfitPercent:15,investorAmount:121000,investorFraction:.5,
+    investorProfitPercent:35,ownerAmount:121000,purchaseCash:242000};
+   await qa.replace(history);qa.vehicleDetail(oldCar.id);click('[data-action="sellVehicle"]');
+   check(find('[name="recordedProfit"]').value==='120366','Zadaný výdělek se nenačetl');
+   set('sold','2026-08-21');await save(()=>qa.getState().vehicles[0].sold==='2026-08-21');
+   const updated=qa.getState().vehicles[0];
+   check(JSON.stringify(updated.funding)===JSON.stringify(oldCar.funding)&&updated.salePeriod==='2026-08'&&updated.recordedProfit===120366,
+    'Doplnění prodeje změnilo financování, období nebo výdělek');
+   pass('Staršímu autu s potvrzeným financováním lze doplnit datum se zachováním výdělku.');
+  }
+
+  phase='Jednoduchá obrazovka DPH';await qa.replace(fixture);qa.nav();await tick();
   check(doc.body.textContent.includes('Přijaté vratky a zaplacené odvody'),'Chybí přehled vratek');
   const accounting=[...doc.querySelectorAll('details')].find(el=>el.firstElementChild.textContent==='Kontrola DPH a podrobnosti');check(accounting&&!accounting.open,'Účetní podrobnosti musí být sbalené');pass('Přehled DPH se otevře se sbalenými podrobnostmi.');
-  phase='Bankovní vratka';qa.recordBankVat('2026-09');set('bankVatDate','2026-09-25');set('bankVatAmount','12000');
+  phase='Bankovní vratka';click('#workspace [data-action="bankVatRefund"]');set('bankVatDate','2026-09-25');set('bankVatAmount','12000');
   await save(()=>qa.getState().transactions.length===1);
   const withRefund=qa.getState();
   check(qa.cashAt(withRefund)===1012000,'Nesprávný zůstatek po vratce');
@@ -62,7 +109,8 @@ const PDFS={"scan.pdf": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9
   phase='PDF bez textu';qa.vehicleForm(id);await upload('salesInvoiceFiles','scan.pdf');await wait(()=>find('#salesInvoiceStatus').textContent.includes('PDF je připravené k uložení')&&!find('#save').disabled);await save(()=>qa.getState().documents.length===3);check(qa.getState().vehicles[0].sale===25200,'Příloha změnila cenu prodeje');pass('PDF bez čitelného textu jde uložit jako přílohu a ponechá hodnoty prodeje.');
   phase='Záloha a kompletní smazání';qa.deleteVehicleForm(id);find('[name="confirmVehicleDelete"]').checked=true;await save(()=>qa.getState().vehicles.length===0);
   const backup=JSON.parse(qa.downloads.at(-1).content);await qa.readBackup(backup);check(backup.data.documents.length===3,'V záloze chybí přílohy');check(qa.getState().documents.length===0,'V aktivní evidenci zůstaly přílohy');pass('Kompletní smazání vytvoří ověřenou zálohu všech tří PDF a odstraní auto i přílohy.');
-  phase='Náhled po testu';await qa.replace(withRefund);qa.nav('vat');set('simpleVatPeriod','2026-09');find('[name="simpleVatPeriod"]').dispatchEvent(new Event('change',{bubbles:true}));
-  status.textContent='Hotovo: všech 7 scénářů prošlo. Níže je fiktivní přehled DPH.';status.className='ok';document.title='AutoDama QA · 7/7 OK';
+  phase='Náhled po testu';await qa.replace(withRefund);
+  const count=results.children.length;
+  status.textContent='Hotovo. Prošlo všech '+count+' scénářů.';status.className='ok';document.title='AutoDama QA · '+count+'/'+count+' OK';
  }catch(error){status.textContent='Test selhal ('+phase+'): '+error.message;status.className='fail';document.title='AutoDama QA · CHYBA';console.error(phase,error);}
 })();
