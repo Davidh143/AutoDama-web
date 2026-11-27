@@ -492,6 +492,21 @@ test('pending production VAT stays out of the monthly estimate until confirmed',
  assert.equal(live.vatResult(s,'2026-11').result,10500);
 });
 
+test('monthly settlement includes a manually entered net profit without deducting tax again',()=>{
+ for(const app of [api,live]){
+  const entered=car('Ruční zisk',{profitMode:'recorded',recordedProfit:120000,recordedProfitAfterIncomeTax:true,
+   vat:'pending',purchaseVatClaim:null,saleVatAmount:null,review:true});
+  const calculated=car('Vypočtený zisk',{purchaseVatClaim:42000,saleVatAmount:52500});
+  const s=stateWith(entered,calculated);
+  s.monthlyDeal={startDate:'2026-11-01',owner:2200000,investor:2200000,months:[]};
+  const estimate=app.monthlyProfitEstimate(s,'2026-11');
+  assert.deepEqual([estimate.sales,estimate.pending,estimate.profit,estimate.tax],[2,0,162500,7500]);
+  entered.recordedProfitAfterIncomeTax=false;
+  const withTax=app.monthlyProfitEstimate(s,'2026-11');
+  assert.deepEqual([withTax.pending,withTax.profit,withTax.tax],[0,144500,25500]);
+ }
+});
+
 test('production preserves older cars and submits new fields using the existing private save contract',async()=>{
  const cloudCode=productionCode.slice(productionCode.indexOf('class CloudError '),productionCode.indexOf('let selectedCloudStore='));
  const Store=vm.runInNewContext(cloudCode+'\nSupabaseStore',{URL,structuredClone,assertState:live.assertState});
